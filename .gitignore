@@ -1,0 +1,60 @@
+# Unity generated files
+
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+MemoryCaptures/
+
+# Unity cache and generated data
+
+.vs/
+.gradle/
+.consulo/
+ExportedObj/
+
+# IDE files
+
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svclog
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Unity crash and diagnostic files
+
+sysinfo.txt
+*.stackdump
+
+# OS-generated files
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary and backup files
+
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
+
+# Build outputs
+
+*.apk
+*.aab
+*.app
+*.unitypackage
