@@ -16,6 +16,12 @@ public class FlankerPositionSelector : MonoBehaviour
 
     [SerializeField, Min(0.1f)]
     private float reevaluationInterval = 0.5f;
+	
+	[SerializeField, Min(0f)]
+	private float switchDistanceAdvantage = 2f;
+
+    [SerializeField, Min(0f)]
+    private float frontExposurePenalty = 8f;
 
     private NavMeshAgent agent;
     private Transform selectedPosition;
@@ -92,6 +98,12 @@ public class FlankerPositionSelector : MonoBehaviour
         bool rightEligible =
             !float.IsPositiveInfinity(rightDistance) && rightVisible;
 
+        float leftScore =
+            leftDistance + CalculateFacingPenalty(leftPosition);
+
+        float rightScore =
+            rightDistance + CalculateFacingPenalty(rightPosition);
+
         if (!leftEligible && !rightEligible)
         {
             agent.ResetPath();
@@ -111,10 +123,31 @@ public class FlankerPositionSelector : MonoBehaviour
 
         bool chooseLeft =
             leftEligible &&
-            (!rightEligible || leftDistance <= rightDistance);
+            (!rightEligible || leftScore <= rightScore);
 
-        Transform nextPosition =
-            chooseLeft ? leftPosition : rightPosition;
+        // Keep a valid current choice unless switching improves the score enough.
+        if (leftEligible && rightEligible)
+        {
+            if (selectedPosition == leftPosition)
+            {
+                float improvement = leftScore - rightScore;
+
+                chooseLeft =
+                    improvement <= 0f ||
+                    improvement < switchDistanceAdvantage;
+            }
+            else if (selectedPosition == rightPosition)
+            {
+                float improvement = rightScore - leftScore;
+
+                chooseLeft =
+                    improvement > 0f &&
+                    improvement >= switchDistanceAdvantage;
+            }
+        }
+
+Transform nextPosition =
+    chooseLeft ? leftPosition : rightPosition;
 
         NavMeshPath nextPath =
             chooseLeft ? leftPath : rightPath;
@@ -137,9 +170,38 @@ public class FlankerPositionSelector : MonoBehaviour
 
         Debug.Log(
             $"Flanker selected: {selectedPosition.name}\n" +
-            $"Left: distance={leftDistance:F2}, clearSight={leftVisible}\n" +
-            $"Right: distance={rightDistance:F2}, clearSight={rightVisible}",
+            $"Left: distance={leftDistance:F2}, score={leftScore:F2}, " +
+            $"clearSight={leftVisible}\n" +
+            $"Right: distance={rightDistance:F2}, score={rightScore:F2}, " +
+            $"clearSight={rightVisible}",
             this);
+    }
+
+    private float CalculateFacingPenalty(Transform candidate)
+    {
+        Vector3 toCandidate =
+            candidate.position - playerReference.position;
+
+        toCandidate.y = 0f;
+
+        Vector3 playerForward = playerReference.forward;
+        playerForward.y = 0f;
+
+        // A position directly beneath the player is not a useful flank.
+        if (toCandidate.sqrMagnitude < 0.0001f ||
+            playerForward.sqrMagnitude < 0.0001f)
+        {
+            return frontExposurePenalty;
+        }
+
+        float alignment = Vector3.Dot(
+            playerForward.normalized,
+            toCandidate.normalized);
+
+        float frontFactor =
+            (Mathf.Clamp(alignment, -1f, 1f) + 1f) * 0.5f;
+
+        return frontFactor * frontExposurePenalty;
     }
 
     private bool HasClearSight(Transform candidate)
