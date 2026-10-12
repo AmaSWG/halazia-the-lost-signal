@@ -735,6 +735,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::FlankerPositionSelector
   leftPosition: {fileID: 446668604}
   rightPosition: {fileID: 565558594}
+  playerReference: {fileID: 626509513}
+  sightHeight: 1.5
+  obstructionMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
 --- !u!1 &967070816
 GameObject:
   m_ObjectHideFlags: 0

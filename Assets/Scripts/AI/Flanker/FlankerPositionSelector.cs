@@ -6,15 +6,20 @@ public class FlankerPositionSelector : MonoBehaviour
 {
     [SerializeField] private Transform leftPosition;
     [SerializeField] private Transform rightPosition;
+    [SerializeField] private Transform playerReference;
+    [SerializeField, Min(0.1f)] private float sightHeight = 1.5f;
+    [SerializeField] private LayerMask obstructionMask = ~0;
 
     private void Start()
     {
         NavMeshAgent agent = GetComponent<NavMeshAgent>();
 
-        if (leftPosition == null || rightPosition == null)
+        if (leftPosition == null ||
+            rightPosition == null ||
+            playerReference == null)
         {
             Debug.LogError(
-                "Flanker: Assign both candidate positions.",
+                "Flanker: Assign both candidates and the player reference.",
                 this);
             return;
         }
@@ -36,21 +41,35 @@ public class FlankerPositionSelector : MonoBehaviour
         float rightDistance = CalculateDistance(
             agent, rightPosition.position, rightPath);
 
+        bool leftVisible = HasClearSight(leftPosition);
+        bool rightVisible = HasClearSight(rightPosition);
+
+        bool leftEligible =
+            !float.IsPositiveInfinity(leftDistance) && leftVisible;
+
+        bool rightEligible =
+            !float.IsPositiveInfinity(rightDistance) && rightVisible;
+
         Debug.Log(
-            $"Flanker path distances: " +
-            $"left = {leftDistance:F2}, right = {rightDistance:F2}",
+            $"Flanker left: distance={leftDistance:F2}, " +
+            $"clearSight={leftVisible}, eligible={leftEligible}\n" +
+            $"Flanker right: distance={rightDistance:F2}, " +
+            $"clearSight={rightVisible}, eligible={rightEligible}",
             this);
 
-        if (float.IsPositiveInfinity(leftDistance) &&
-            float.IsPositiveInfinity(rightDistance))
+        if (!leftEligible && !rightEligible)
         {
+            agent.ResetPath();
+
             Debug.LogWarning(
-                "Flanker: Neither candidate has a complete path.",
+                "Flanker: No reachable candidate has clear sight.",
                 this);
             return;
         }
 
-        bool chooseLeft = leftDistance <= rightDistance;
+        bool chooseLeft =
+            leftEligible &&
+            (!rightEligible || leftDistance <= rightDistance);
 
         Transform selectedPosition =
             chooseLeft ? leftPosition : rightPosition;
@@ -69,6 +88,29 @@ public class FlankerPositionSelector : MonoBehaviour
         Debug.Log(
             $"Flanker selected: {selectedPosition.name}",
             this);
+    }
+
+    private bool HasClearSight(Transform candidate)
+    {
+        Vector3 start =
+            candidate.position + Vector3.up * sightHeight;
+
+        Vector3 end =
+            playerReference.position + Vector3.up * sightHeight;
+
+        bool blocked = Physics.Linecast(
+            start,
+            end,
+            obstructionMask,
+            QueryTriggerInteraction.Ignore);
+
+        Debug.DrawLine(
+            start,
+            end,
+            blocked ? Color.red : Color.green,
+            10f);
+
+        return !blocked;
     }
 
     private float CalculateDistance(
