@@ -7,12 +7,24 @@ public class FlankerPositionSelector : MonoBehaviour
     [SerializeField] private Transform leftPosition;
     [SerializeField] private Transform rightPosition;
     [SerializeField] private Transform playerReference;
-    [SerializeField, Min(0.1f)] private float sightHeight = 1.5f;
-    [SerializeField] private LayerMask obstructionMask = ~0;
+
+    [SerializeField, Min(0.1f)]
+    private float sightHeight = 1.5f;
+
+    [SerializeField]
+    private LayerMask obstructionMask = ~0;
+
+    [SerializeField, Min(0.1f)]
+    private float reevaluationInterval = 0.5f;
+
+    private NavMeshAgent agent;
+    private Transform selectedPosition;
+    private float nextEvaluationTime;
+    private bool reportedNoCandidate;
 
     private void Start()
     {
-        NavMeshAgent agent = GetComponent<NavMeshAgent>();
+        agent = GetComponent<NavMeshAgent>();
 
         if (leftPosition == null ||
             rightPosition == null ||
@@ -21,6 +33,8 @@ public class FlankerPositionSelector : MonoBehaviour
             Debug.LogError(
                 "Flanker: Assign both candidates and the player reference.",
                 this);
+
+            enabled = false;
             return;
         }
 
@@ -29,17 +43,45 @@ public class FlankerPositionSelector : MonoBehaviour
             Debug.LogError(
                 "Flanker: Agent is not on a matching NavMesh.",
                 this);
+
+            enabled = false;
             return;
         }
 
+        EvaluatePositions();
+
+        nextEvaluationTime =
+            Time.time + reevaluationInterval;
+    }
+
+    private void Update()
+    {
+        if (Time.time < nextEvaluationTime)
+        {
+            return;
+        }
+
+        nextEvaluationTime =
+            Time.time + reevaluationInterval;
+
+        if (!agent.isActiveAndEnabled || !agent.isOnNavMesh)
+        {
+            return;
+        }
+
+        EvaluatePositions();
+    }
+
+    private void EvaluatePositions()
+    {
         NavMeshPath leftPath = new NavMeshPath();
         NavMeshPath rightPath = new NavMeshPath();
 
         float leftDistance = CalculateDistance(
-            agent, leftPosition.position, leftPath);
+            leftPosition.position, leftPath);
 
         float rightDistance = CalculateDistance(
-            agent, rightPosition.position, rightPath);
+            rightPosition.position, rightPath);
 
         bool leftVisible = HasClearSight(leftPosition);
         bool rightVisible = HasClearSight(rightPosition);
@@ -50,20 +92,20 @@ public class FlankerPositionSelector : MonoBehaviour
         bool rightEligible =
             !float.IsPositiveInfinity(rightDistance) && rightVisible;
 
-        Debug.Log(
-            $"Flanker left: distance={leftDistance:F2}, " +
-            $"clearSight={leftVisible}, eligible={leftEligible}\n" +
-            $"Flanker right: distance={rightDistance:F2}, " +
-            $"clearSight={rightVisible}, eligible={rightEligible}",
-            this);
-
         if (!leftEligible && !rightEligible)
         {
             agent.ResetPath();
+            selectedPosition = null;
 
-            Debug.LogWarning(
-                "Flanker: No reachable candidate has clear sight.",
-                this);
+            if (!reportedNoCandidate)
+            {
+                Debug.LogWarning(
+                    "Flanker: No reachable candidate has clear sight. Holding.",
+                    this);
+
+                reportedNoCandidate = true;
+            }
+
             return;
         }
 
@@ -71,13 +113,18 @@ public class FlankerPositionSelector : MonoBehaviour
             leftEligible &&
             (!rightEligible || leftDistance <= rightDistance);
 
-        Transform selectedPosition =
+        Transform nextPosition =
             chooseLeft ? leftPosition : rightPosition;
 
-        NavMeshPath selectedPath =
+        NavMeshPath nextPath =
             chooseLeft ? leftPath : rightPath;
 
-        if (!agent.SetPath(selectedPath))
+        if (nextPosition == selectedPosition)
+        {
+            return;
+        }
+
+        if (!agent.SetPath(nextPath))
         {
             Debug.LogError(
                 "Flanker: Could not assign the selected path.",
@@ -85,8 +132,13 @@ public class FlankerPositionSelector : MonoBehaviour
             return;
         }
 
+        selectedPosition = nextPosition;
+        reportedNoCandidate = false;
+
         Debug.Log(
-            $"Flanker selected: {selectedPosition.name}",
+            $"Flanker selected: {selectedPosition.name}\n" +
+            $"Left: distance={leftDistance:F2}, clearSight={leftVisible}\n" +
+            $"Right: distance={rightDistance:F2}, clearSight={rightVisible}",
             this);
     }
 
@@ -108,17 +160,17 @@ public class FlankerPositionSelector : MonoBehaviour
             start,
             end,
             blocked ? Color.red : Color.green,
-            10f);
+            reevaluationInterval);
 
         return !blocked;
     }
 
     private float CalculateDistance(
-        NavMeshAgent agent,
         Vector3 destination,
         NavMeshPath path)
     {
-        bool calculated = agent.CalculatePath(destination, path);
+        bool calculated =
+            agent.CalculatePath(destination, path);
 
         if (!calculated ||
             path.status != NavMeshPathStatus.PathComplete)
