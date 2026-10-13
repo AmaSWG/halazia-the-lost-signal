@@ -84,6 +84,8 @@ namespace Halazia.Shared.Movement
         private Vector3 _lastWorldPosition;
         private Vector3 _actualVelocity;
         private Vector3 _currentMoveDirection = Vector3.forward;
+        private bool _isMovementLocked = false;
+        private float _speedModifier = 1.0f;
 
         // Stuck Detection Tracking
         private float _stuckSampleTimer = 0f;
@@ -91,10 +93,21 @@ namespace Halazia.Shared.Movement
         private Vector3 _positionAtLastSample;
 
         // Public Interface Properties
-        public bool IsMoving => _isMoving;
+        public bool IsMoving => _isMoving && !_isMovementLocked;
+        public bool IsMovementLocked => _isMovementLocked;
         public Vector3 Velocity => _actualVelocity;
         public float CurrentSpeed => _currentForwardSpeed;
         public Vector3 TargetDestination => _targetDestination;
+
+        public void SetMovementLocked(bool locked)
+        {
+            _isMovementLocked = locked;
+        }
+
+        public void SetSpeedModifier(float multiplier)
+        {
+            _speedModifier = Mathf.Max(0f, multiplier);
+        }
 
         private void Awake()
         {
@@ -112,8 +125,16 @@ namespace Halazia.Shared.Movement
             // 1. Process active path traversal
             if (_isMoving && _pathWaypoints.Count > 0)
             {
-                ProcessPathFollowing(deltaTime);
-                CheckForBlockage(deltaTime);
+                if (_isMovementLocked)
+                {
+                    // Decelerate rapidly to 0 during attack/stagger animation lock
+                    _currentForwardSpeed = Mathf.MoveTowards(_currentForwardSpeed, 0f, _deceleration * 2.0f * deltaTime);
+                }
+                else
+                {
+                    ProcessPathFollowing(deltaTime);
+                    CheckForBlockage(deltaTime);
+                }
             }
             else
             {
@@ -320,7 +341,7 @@ namespace Halazia.Shared.Movement
                 }
             }
 
-            return speed;
+            return speed * _speedModifier;
         }
 
         private float CalculateRemainingDistance(Vector3 flatSelf)

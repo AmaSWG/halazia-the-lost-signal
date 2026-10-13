@@ -33,6 +33,21 @@ namespace Halazia.Shared.Movement
         void Stop();
 
         /// <summary>
+        /// Locks or unlocks forward translation (e.g. during attack animations or stagger) without clearing the path.
+        /// </summary>
+        void SetMovementLocked(bool locked);
+
+        /// <summary>
+        /// Temporarily scales movement speed (e.g. 0.5f while aiming or strafing, 1.0f for normal cruising).
+        /// </summary>
+        void SetSpeedModifier(float multiplier);
+
+        /// <summary>
+        /// True if forward movement is currently locked (e.g. during an attack animation).
+        /// </summary>
+        bool IsMovementLocked { get; }
+
+        /// <summary>
         /// True if the agent is actively following a path towards a destination.
         /// </summary>
         bool IsMoving { get; }
