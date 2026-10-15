@@ -57,6 +57,7 @@ namespace Halazia.AI.Commander
         private bool _isPlayerDetected = false;
         private Vector3 _lastKnownPlayerPosition;
         private float _tickTimer = 0f;
+        private readonly Dictionary<ISquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<ISquadAgent, Vector3>();
 
         private void Awake()
         {
@@ -145,9 +146,13 @@ namespace Halazia.AI.Commander
                     ISquadAgent agent = pair.Key;
                     SquadOrder order = pair.Value;
 
-                    // Issue order only if it represents a new directive
-                    if (agent.CurrentTask != order.TaskType)
+                    bool taskChanged = agent.CurrentTask != order.TaskType;
+                    bool targetMoved = !_lastDispatchedPositions.TryGetValue(agent, out Vector3 lastPos) 
+                                       || Vector3.Distance(lastPos, order.TargetPosition) > 0.75f;
+
+                    if (taskChanged || targetMoved)
                     {
+                        _lastDispatchedPositions[agent] = order.TargetPosition;
                         agent.AssignOrder(order);
                         Debug.Log($"[CommanderAgent] Dispatched order {order} to agent {agent.AgentId} ({agent.Role}).");
                     }

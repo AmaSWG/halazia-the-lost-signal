@@ -56,6 +56,22 @@ namespace Halazia.Sandbox
             }
         }
 
+        private void Update()
+        {
+            if (_currentTask == SquadTaskType.Pursue && _activeOrder.TargetPosition != Vector3.zero)
+            {
+                // If stopped but still not at player, retry pathing
+                if (_motor != null && !_motor.IsMoving)
+                {
+                    float dist = Vector3.Distance(transform.position, _activeOrder.TargetPosition);
+                    if (dist > 1.8f)
+                    {
+                        ExecutePath(_activeOrder.TargetPosition);
+                    }
+                }
+            }
+        }
+
         public void AssignOrder(SquadOrder order)
         {
             _activeOrder = order;
@@ -63,13 +79,36 @@ namespace Halazia.Sandbox
 
             Debug.Log($"[MockSquadAgent:{_agentId}] Received order: {order.TaskType} to {order.TargetPosition}");
 
-            // Calculate path and execute through IAgentMotor
-            if (_motor != null)
+            ExecutePath(order.TargetPosition);
+        }
+
+        private void ExecutePath(Vector3 targetPosition)
+        {
+            if (_motor == null) return;
+
+            Vector3 start = transform.position;
+            Vector3 target = targetPosition;
+
+            if (NavMesh.SamplePosition(start, out NavMeshHit startHit, 3.0f, NavMesh.AllAreas))
             {
-                NavMeshPath path = new NavMeshPath();
-                if (NavMesh.CalculatePath(transform.position, order.TargetPosition, NavMesh.AllAreas, path))
+                start = startHit.position;
+            }
+
+            if (NavMesh.SamplePosition(target, out NavMeshHit targetHit, 5.0f, NavMesh.AllAreas))
+            {
+                target = targetHit.position;
+            }
+
+            NavMeshPath path = new NavMeshPath();
+            if (NavMesh.CalculatePath(start, target, NavMesh.AllAreas, path))
+            {
+                if (path.corners != null && path.corners.Length > 0)
                 {
                     _motor.SetPath(path.corners);
+                    if (_currentTask == SquadTaskType.Pursue || _currentTask == SquadTaskType.Flank)
+                    {
+                        _motor.SetFaceTarget(target);
+                    }
                 }
             }
         }
