@@ -128,7 +128,10 @@ namespace Halazia.AI.Commander
                 toDict[toId] = 0f;
             }
 
-            toDict[toId] += 1f;
+            // Apply exponential recency weight decay based on elapsed time since last entry
+            float elapsed = Mathf.Max(0f, Time.time - _lastNodeEntryTime);
+            float weight = (_recencyHalfLifeSeconds > 0.01f) ? Mathf.Pow(0.5f, elapsed / _recencyHalfLifeSeconds) : 1.0f;
+            toDict[toId] += Mathf.Max(0.5f, weight);
             Debug.Log($"[CorridorHeatmap] Player transition recorded: {fromId} -> {toId} (Total: {toDict[toId]:F1})");
         }
 
@@ -242,7 +245,7 @@ namespace Halazia.AI.Commander
 
         #region Gizmos & Visualization
 
-        private void OnDrawGizmosSelected()
+        private void OnDrawGizmos()
         {
             if (_corridorNodes == null) return;
 

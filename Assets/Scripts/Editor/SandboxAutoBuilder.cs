@@ -119,6 +119,13 @@ namespace Halazia.Editor
             SetupCharacterController(cmdObj);
             cmdObj.AddComponent<AgentMotor>();
 
+            if (controller != null)
+            {
+                var anim = cmdObj.AddComponent<Animator>();
+                anim.runtimeAnimatorController = controller;
+                cmdObj.AddComponent<AgentAnimatorDriver>();
+            }
+
             var commander = cmdObj.AddComponent<CommanderAgent>();
             var cmdSO = new SerializedObject(commander);
             cmdSO.FindProperty("_playerTransform").objectReferenceValue = playerObj.transform;

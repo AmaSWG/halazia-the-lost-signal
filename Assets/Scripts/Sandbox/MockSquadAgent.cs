@@ -30,7 +30,7 @@ namespace Halazia.Sandbox
         public Vector3 Position => transform.position;
         public float CurrentHealth => _currentHealth;
         public float MaxHealth => _maxHealth;
-        public bool IsAlive => _currentHealth > 0.001f;
+        public bool IsAlive => _currentHealth > 0.001f && gameObject.activeInHierarchy;
         public bool IsEngagedWithPlayer => _currentTask == SquadTaskType.Pursue;
         public SquadTaskType CurrentTask => _currentTask;
 
@@ -38,12 +38,23 @@ namespace Halazia.Sandbox
         {
             _currentHealth = _maxHealth;
             _motor = GetComponent<IAgentMotor>();
+        }
 
-            // Auto-register with Commander if present in scene
+        private void OnEnable()
+        {
             var commander = FindAnyObjectByType<CommanderAgent>();
             if (commander != null)
             {
                 commander.RegisterSquadMember(this);
+            }
+        }
+
+        private void OnDisable()
+        {
+            var commander = FindAnyObjectByType<CommanderAgent>();
+            if (commander != null)
+            {
+                commander.UnregisterSquadMember(this);
             }
         }
 

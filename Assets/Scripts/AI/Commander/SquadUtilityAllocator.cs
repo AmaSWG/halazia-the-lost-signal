@@ -42,12 +42,21 @@ namespace Halazia.AI.Commander
             var activeAgents = availableAgents.FindAll(a => a != null && a.IsAlive);
             if (activeAgents.Count == 0) return assignments;
 
+            // Prioritize the top N highest-priority orders matching available manpower
+            // Guarantees frontline direct pursuit is never abandoned when an agent falls in battle
+            var prioritizedOrders = new List<SquadOrder>(pendingOrders);
+            prioritizedOrders.Sort((a, b) => b.Priority.CompareTo(a.Priority));
+            if (prioritizedOrders.Count > activeAgents.Count)
+            {
+                prioritizedOrders = prioritizedOrders.GetRange(0, activeAgents.Count);
+            }
+
             // Build candidate utility matrix: List of (Agent, Order, Score) tuples
             var candidateScores = new List<(ISquadAgent agent, SquadOrder order, float score)>();
 
             foreach (var agent in activeAgents)
             {
-                foreach (var order in pendingOrders)
+                foreach (var order in prioritizedOrders)
                 {
                     float score = ComputeUtility(agent, order);
                     candidateScores.Add((agent, order, score));
@@ -138,7 +147,7 @@ namespace Halazia.AI.Commander
                     return task switch
                     {
                         SquadTaskType.Flank => 1.0f,
-                        SquadTaskType.Pursue => 0.7f,
+                        SquadTaskType.Pursue => 0.85f,
                         SquadTaskType.Investigate => 0.6f,
                         SquadTaskType.CoverRoute => 0.3f,
                         _ => 0.1f

@@ -141,15 +141,50 @@ namespace Halazia.Sandbox
             }
         }
 
-        private void PickRandomNavMeshDestination()
+        [ContextMenu("1. Wander to Random NavMesh Point (Space / R)")]
+        public void PickRandomNavMeshDestination()
         {
             Vector3 randomDirection = Random.insideUnitSphere * _randomWanderRadius;
+            randomDirection.y = 0;
             randomDirection += transform.position;
 
             if (NavMesh.SamplePosition(randomDirection, out NavMeshHit hit, _randomWanderRadius, NavMesh.AllAreas))
             {
                 Debug.Log($"[MovementSandboxDriver] Triggered random destination at {hit.position}.");
                 NavigateTo(hit.position);
+            }
+        }
+
+        [ContextMenu("2. Walk Into Barricade (Test Blockage Detector)")]
+        public void WalkIntoBarricadeMenu()
+        {
+            var barricade = GameObject.Find("Corridor_Barricade");
+            if (barricade != null)
+            {
+                // Commanded point directly through / behind the barricade
+                Vector3 target = barricade.transform.position + Vector3.forward * 2.5f;
+                Debug.Log($"[MovementSandboxDriver] Commanding agent to walk through barricade at {target} to test blockage detection...");
+                NavigateTo(target);
+            }
+        }
+
+        [ContextMenu("3. Trigger Test Attack (F / Right-Click)")]
+        public void TriggerTestAttack()
+        {
+            if (_animatorDriver != null)
+            {
+                Debug.Log("[MovementSandboxDriver] <color=orange>ACTION: Triggering Attack animation. Motor translation temporarily locked.</color>");
+                _animatorDriver.TriggerAttack(0);
+            }
+        }
+
+        [ContextMenu("4. Trigger Test Hit Reaction (H)")]
+        public void TriggerTestHit()
+        {
+            if (_animatorDriver != null)
+            {
+                Debug.Log("[MovementSandboxDriver] <color=yellow>ACTION: Triggering Hit reaction animation.</color>");
+                _animatorDriver.TriggerHit();
             }
         }
 
@@ -169,28 +204,6 @@ namespace Halazia.Sandbox
             else
             {
                 Debug.LogWarning($"[MovementSandboxDriver] Failed to calculate NavMesh path to {destination}. Status: {path.status}.");
-            }
-        }
-
-        private void TriggerTestAttack()
-        {
-            if (_animatorDriver != null)
-            {
-                Debug.Log("[MovementSandboxDriver] <color=orange>ACTION: Triggering Attack animation. Motor translation temporarily locked.</color>");
-                _animatorDriver.TriggerAttack(0);
-            }
-            else
-            {
-                Debug.LogWarning("[MovementSandboxDriver] No AgentAnimatorDriver attached to test attack.");
-            }
-        }
-
-        private void TriggerTestHit()
-        {
-            if (_animatorDriver != null)
-            {
-                Debug.Log("[MovementSandboxDriver] <color=yellow>ACTION: Triggering Hit reaction animation.</color>");
-                _animatorDriver.TriggerHit();
             }
         }
 

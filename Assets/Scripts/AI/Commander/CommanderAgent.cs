@@ -26,6 +26,16 @@ namespace Halazia.AI.Commander
         [Tooltip("Distance at which Commander prefers to oversee combat without engaging in close-quarters melee.")]
         [SerializeField] private float _preferredCommandDistance = 12.0f;
 
+        [Header("Self-Defense & Combat")]
+        [Tooltip("Distance threshold at which Commander defends itself directly against the player.")]
+        [SerializeField] private float _meleeAttackDistance = 2.8f;
+
+        [Tooltip("Cooldown period between self-defense attacks (seconds).")]
+        [SerializeField] private float _attackCooldown = 1.2f;
+
+        private float _lastAttackTime = -10f;
+        private bool _isInMeleeDefenseMode = false;
+
         [Header("Squad Registry")]
         [Tooltip("Manual list of squad agents, or automatically registered at runtime.")]
         [SerializeField] private List<MonoBehaviour> _initialSquadMembers = new List<MonoBehaviour>();
@@ -97,10 +107,46 @@ namespace Halazia.AI.Commander
             float deltaTime = Time.deltaTime;
             _tickTimer += deltaTime;
 
+            // Continuous close-quarters self-defense check against player
+            CheckCloseQuartersSelfDefense();
+
             if (_tickTimer >= _decisionTickInterval)
             {
                 _tickTimer = 0f;
                 RunTacticalDecisionCycle();
+            }
+        }
+
+        private void CheckCloseQuartersSelfDefense()
+        {
+            if (_playerTransform == null) return;
+
+            float distToPlayer = Vector3.Distance(transform.position, _playerTransform.position);
+            if (distToPlayer <= _meleeAttackDistance)
+            {
+                _isInMeleeDefenseMode = true;
+                _motor?.SetFaceTarget(_playerTransform);
+
+                if (Time.time - _lastAttackTime >= _attackCooldown)
+                {
+                    _lastAttackTime = Time.time;
+                    ExecuteSelfDefenseAttack();
+                }
+            }
+            else
+            {
+                _isInMeleeDefenseMode = false;
+            }
+        }
+
+        private void ExecuteSelfDefenseAttack()
+        {
+            Debug.LogWarning($"[CommanderAgent] ⚔️ Player in close quarters ({Vector3.Distance(transform.position, _playerTransform.position):F1}m)! Commander executes tactical defense strike!");
+
+            var driver = GetComponent<AgentAnimatorDriver>();
+            if (driver != null)
+            {
+                driver.TriggerAttack();
             }
         }
 
@@ -133,13 +179,28 @@ namespace Halazia.AI.Commander
             // 1. Observe player state
             UpdatePlayerObservation();
 
-            // 2. Generate required tactical orders based on game situation
+            // 2. Ensure squad members are discovered if registry was reset
+            EnsureSquadRegistered();
+
+            // 3. Generate required tactical orders based on game situation
             List<SquadOrder> orders = FormulateTacticalOrders();
 
-            // 3. Solve optimal, conflict-free allocation
-            if (_registeredSquad.Count > 0 && orders.Count > 0)
+            // 4. Filter only currently active and alive squad members (non-destructive)
+            var activeSquad = new List<ISquadAgent>();
+            foreach (var agent in _registeredSquad)
             {
-                var assignments = _utilityAllocator.SolveOptimalAllocation(_registeredSquad, orders);
+                if (agent != null && agent.IsAlive)
+                {
+                    if (agent is MonoBehaviour mb && mb != null && mb.gameObject.activeInHierarchy)
+                    {
+                        activeSquad.Add(agent);
+                    }
+                }
+            }
+
+            if (activeSquad.Count > 0 && orders.Count > 0)
+            {
+                var assignments = _utilityAllocator.SolveOptimalAllocation(activeSquad, orders);
 
                 foreach (var pair in assignments)
                 {
@@ -159,8 +220,23 @@ namespace Halazia.AI.Commander
                 }
             }
 
-            // 4. Update Commander's own tactical positioning via IAgentMotor
+            // 5. Update Commander's own tactical positioning via IAgentMotor
             UpdateCommanderSelfMovement();
+        }
+
+        private void EnsureSquadRegistered()
+        {
+            if (_registeredSquad.Count == 0)
+            {
+                var found = FindObjectsOfType<MonoBehaviour>();
+                foreach (var mb in found)
+                {
+                    if (mb is ISquadAgent squadAgent && (MonoBehaviour)squadAgent != this)
+                    {
+                        RegisterSquadMember(squadAgent);
+                    }
+                }
+            }
         }
 
         private void UpdatePlayerObservation()
@@ -191,22 +267,22 @@ namespace Halazia.AI.Commander
 
             if (_isPlayerDetected)
             {
-                // Order A: Direct frontal pursuit
+                // Order A: Direct frontal pursuit (Top priority, direct combat pressure)
                 orders.Add(new SquadOrder(SquadTaskType.Pursue, _lastKnownPlayerPosition, priority: 1.0f));
 
-                // Order B: Lateral flanking vector (offset from player facing)
+                // Order B: Lateral flanking vector (Tactical angle)
                 Vector3 flankOffset = Vector3.Cross(Vector3.up, (_lastKnownPlayerPosition - transform.position).normalized) * 7.0f;
                 Vector3 flankPos = _lastKnownPlayerPosition + flankOffset;
-                orders.Add(new SquadOrder(SquadTaskType.Flank, flankPos, priority: 0.9f));
+                orders.Add(new SquadOrder(SquadTaskType.Flank, flankPos, priority: 0.80f));
 
-                // Order C: Cover predicted escape corridor (adaptive intelligence)
+                // Order C: Cover predicted escape corridor (Preemptive hold, subordinate to direct combat)
                 if (_heatmapTracker != null && _heatmapTracker.PredictLikelyEscapeNode(_lastKnownPlayerPosition, out var predictedNode, out float prob))
                 {
                     orders.Add(new SquadOrder(
                         SquadTaskType.CoverRoute,
                         predictedNode.WorldPosition,
                         predictedNode.NodeId,
-                        priority: 0.85f + (prob * 0.3f)));
+                        priority: 0.65f + (prob * 0.12f)));
                 }
                 else
                 {
@@ -214,7 +290,7 @@ namespace Halazia.AI.Commander
                     var frequentNode = _heatmapTracker?.GetMostFrequentCorridor();
                     if (frequentNode != null)
                     {
-                        orders.Add(new SquadOrder(SquadTaskType.CoverRoute, frequentNode.WorldPosition, frequentNode.NodeId, 0.75f));
+                        orders.Add(new SquadOrder(SquadTaskType.CoverRoute, frequentNode.WorldPosition, frequentNode.NodeId, 0.60f));
                     }
                 }
             }
@@ -233,21 +309,54 @@ namespace Halazia.AI.Commander
         /// </summary>
         private void UpdateCommanderSelfMovement()
         {
-            if (_motor == null) return;
+            if (_motor == null || _playerTransform == null) return;
+
+            float distToPlayer = Vector3.Distance(transform.position, _playerTransform.position);
+
+            // In close-quarters melee combat: stop running and plant feet to face enemy directly
+            if (distToPlayer <= _meleeAttackDistance)
+            {
+                if (_motor.IsMoving)
+                {
+                    _motor.Stop();
+                }
+                _motor.SetFaceTarget(_playerTransform);
+                return;
+            }
 
             if (_isPlayerDetected)
             {
-                // Maintain standoff command distance
-                Vector3 awayFromPlayer = (transform.position - _lastKnownPlayerPosition).normalized;
-                Vector3 desiredCommandPost = _lastKnownPlayerPosition + awayFromPlayer * _preferredCommandDistance;
+                // Reposition to maintain standoff oversight distance
+                Vector3 awayDir = (transform.position - _lastKnownPlayerPosition);
+                awayDir.y = 0;
+                if (awayDir.sqrMagnitude < 0.01f) awayDir = -transform.forward;
+                awayDir.Normalize();
 
-                if (NavMesh.SamplePosition(desiredCommandPost, out NavMeshHit hit, 4.0f, NavMesh.AllAreas))
+                Vector3 bestPost = Vector3.zero;
+                bool foundPost = false;
+
+                // Test straight back, 45 deg angles, and lateral strafes to prevent getting stuck against deck walls/edges
+                float[] angleOffsets = { 0f, 45f, -45f, 90f, -90f, 135f, -135f };
+                foreach (float angle in angleOffsets)
                 {
-                    float distToPost = Vector3.Distance(transform.position, hit.position);
-                    if (distToPost > 2.5f && !_motor.IsMoving)
+                    Vector3 candidateDir = Quaternion.Euler(0, angle, 0) * awayDir;
+                    Vector3 candidatePost = _lastKnownPlayerPosition + candidateDir * _preferredCommandDistance;
+
+                    if (NavMesh.SamplePosition(candidatePost, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
+                    {
+                        bestPost = hit.position;
+                        foundPost = true;
+                        break;
+                    }
+                }
+
+                if (foundPost)
+                {
+                    float distToPost = Vector3.Distance(transform.position, bestPost);
+                    if (distToPost > 2.0f && !_motor.IsMoving)
                     {
                         NavMeshPath path = new NavMeshPath();
-                        if (NavMesh.CalculatePath(transform.position, hit.position, NavMesh.AllAreas, path))
+                        if (NavMesh.CalculatePath(transform.position, bestPost, NavMesh.AllAreas, path))
                         {
                             _motor.SetPath(path.corners);
                             _motor.SetFaceTarget(_playerTransform);
@@ -281,10 +390,22 @@ namespace Halazia.AI.Commander
             Gizmos.color = new Color(1f, 0.84f, 0f, 0.3f);
             Gizmos.DrawWireSphere(transform.position, _preferredCommandDistance);
 
+            // Draw close-quarters melee defense zone
+            if (_isInMeleeDefenseMode)
+            {
+                Gizmos.color = Color.red;
+                Gizmos.DrawWireSphere(transform.position + Vector3.up * 1.0f, _meleeAttackDistance);
+            }
+            else
+            {
+                Gizmos.color = new Color(1f, 0.35f, 0f, 0.35f);
+                Gizmos.DrawWireSphere(transform.position, _meleeAttackDistance);
+            }
+
             // Draw line to observed player
             if (_playerTransform != null)
             {
-                Gizmos.color = Color.red;
+                Gizmos.color = _isInMeleeDefenseMode ? Color.red : Color.yellow;
                 Gizmos.DrawLine(transform.position + Vector3.up * 1.5f, _playerTransform.position + Vector3.up * 1.5f);
             }
 
