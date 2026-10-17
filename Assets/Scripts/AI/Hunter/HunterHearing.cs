@@ -31,12 +31,28 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
     [SerializeField] private float meleeRange = 1.8f;
     [SerializeField] private float attackCooldown = 1.2f;
 
+    [Header("Vision")]
+    [SerializeField] private float viewDistance = 15f;
+    [SerializeField, Range(0f, 360f)] private float viewAngle = 120f;
+    [SerializeField] private LayerMask obstacleMask;
+    [SerializeField] private float repathInterval = 0.5f;
+    [SerializeField] private float targetMoveThreshold = 0.5f;
+    [SerializeField] private bool canSeePlayer;
+
     private ICombatActions combat;
-    private float nextAttackTime;
     private IAgentMotor motor;
+    private CharacterController body;
+
     private Vector3 startingPosition;
+    private Vector3 lastKnownPlayerPosition;
+    private Vector3 lastPathTarget;
+
+    private float nextAttackTime;
+    private float nextPathTime;
     private float searchTimer;
     private float currentHealth;
+
+    private bool hadVisualContact;
     private int actionVersion;
     private SquadTaskType currentTask = SquadTaskType.Idle;
 
@@ -49,7 +65,8 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         maxHealth > 0f ? Mathf.Clamp01(currentHealth / maxHealth) : 0f;
     public bool IsAlive => currentHealth > 0f;
     public bool IsEngagedWithPlayer =>
-        currentState == HunterState.Pursuing || currentState == HunterState.Attacking;
+        currentState == HunterState.Pursuing ||
+        currentState == HunterState.Attacking;
     public SquadTaskType CurrentTask => currentTask;
 
     public event Action<ISquadAgent> OnTaskArrived;
@@ -60,9 +77,11 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
     private void Awake()
     {
         motor = GetComponent<IAgentMotor>();
+        combat = GetComponent<ICombatActions>();
+        body = GetComponent<CharacterController>();
+
         startingPosition = transform.position;
         currentHealth = maxHealth;
-        combat = GetComponent<ICombatActions>();
     }
 
     private void OnEnable()
@@ -82,6 +101,9 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
             motor.OnPathBlocked -= HandleBlocked;
             motor.Stop();
         }
+
+        hadVisualContact = false;
+        canSeePlayer = false;
     }
 
     private void Update()
@@ -89,24 +111,113 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         if (!IsAlive)
             return;
 
+        canSeePlayer = CheckPlayerVisibility();
+
+        if (canSeePlayer)
+        {
+            bool newlySeen = !hadVisualContact;
+            hadVisualContact = true;
+            lastKnownPlayerPosition = playerTransform.position;
+
+            if (newlySeen)
+                Debug.Log("Hunter: player spotted!");
+
+            UpdateVisiblePursuit(newlySeen);
+            return;
+        }
+
+        if (hadVisualContact)
+        {
+            hadVisualContact = false;
+
+            Debug.Log(
+                "Hunter: lost sight—checking last known position.");
+
+            AssignOrder(new SquadOrder(
+                SquadTaskType.Investigate,
+                lastKnownPlayerPosition));
+        }
+
+        if (currentState == HunterState.Searching)
+            UpdateSearch();
+    }
+
+    private bool CheckPlayerVisibility()
+    {
+        if (playerTransform == null ||
+            !playerTransform.gameObject.activeInHierarchy)
+            return false;
+
+        // Use collider centres so capsule pivots do not affect eye height.
+        Vector3 eye = body.bounds.center +
+            Vector3.up * body.bounds.extents.y * 0.5f;
+
+        Collider playerCollider =
+            playerTransform.GetComponentInChildren<Collider>();
+
+        Vector3 target = playerCollider != null
+            ? playerCollider.bounds.center
+            : playerTransform.position + Vector3.up;
+
+        Vector3 toTarget = target - eye;
+
+        if (toTarget.magnitude > viewDistance)
+            return false;
+
+        Vector3 flatDirection = toTarget;
+        flatDirection.y = 0f;
+
+        if (flatDirection.sqrMagnitude > 0.001f &&
+            Vector3.Angle(transform.forward, flatDirection)
+                > viewAngle * 0.5f)
+            return false;
+
+        // Only objects on the selected obstacle layers block vision.
+        return !Physics.Linecast(
+            eye, target, obstacleMask,
+            QueryTriggerInteraction.Ignore);
+    }
+
+    private void UpdateVisiblePursuit(bool newlySeen)
+    {
+        currentTask = SquadTaskType.Pursue;
+
         if (TryMeleeAttack())
             return;
 
-        // Player moved out of melee range: resume pursuit.
-        if (currentState == HunterState.Attacking &&
-            playerTransform != null)
-        {
-            AssignOrder(new SquadOrder(
-                SquadTaskType.Pursue, playerTransform.position));
-        }
+        bool leavingAttack =
+            currentState == HunterState.Attacking;
 
-        if (!IsAlive || currentState != HunterState.Searching)
+        bool enteringPursuit =
+            currentState != HunterState.Pursuing;
+
+        currentState = HunterState.Pursuing;
+
+        if (motor.IsMovementLocked)
             return;
 
-        // Ask the motor to look around rather than rotating directly.
+        bool targetMoved =
+            Vector3.Distance(lastPathTarget,
+                lastKnownPlayerPosition) >= targetMoveThreshold;
+
+        bool refreshDue = Time.time >= nextPathTime;
+
+        if (newlySeen || leavingAttack || enteringPursuit ||
+            (refreshDue && (targetMoved || !motor.IsMoving)))
+        {
+            nextPathTime = Time.time + repathInterval;
+
+            if (!TryMoveTo(lastKnownPlayerPosition))
+                HandleBlocked();
+        }
+    }
+
+    private void UpdateSearch()
+    {
         float angle = Time.time * 60f * Mathf.Deg2Rad;
-        Vector3 lookDirection =
-            new Vector3(Mathf.Sin(angle), 0f, Mathf.Cos(angle));
+
+        Vector3 lookDirection = new Vector3(
+            Mathf.Sin(angle), 0f, Mathf.Cos(angle));
 
         motor.SetFaceTarget(
             (Vector3?)(transform.position + lookDirection * 3f));
@@ -116,10 +227,12 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         if (searchTimer > 0f)
             return;
 
-        // A Commander event handler may immediately issue another order.
+        Debug.Log("Hunter: search finished—target lost.");
+
         int versionBeforeReport = actionVersion;
         OnTargetLost?.Invoke(this);
 
+        // A listener may synchronously issue a new order.
         if (actionVersion != versionBeforeReport || !IsAlive)
             return;
 
@@ -157,25 +270,27 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
             return;
         }
 
-        // This first version supports the Hunter's primary orders.
         if (order.TaskType != SquadTaskType.Investigate &&
             order.TaskType != SquadTaskType.Pursue)
         {
-            motor.Stop();
-            motor.SetFaceTarget((Transform)null);
-            currentTask = SquadTaskType.Idle;
-            currentState = HunterState.Idle;
-            OnTaskBlocked?.Invoke(this);
+            CancelOrder();
+            Debug.LogWarning(
+                $"Hunter: unsupported order {order.TaskType}.");
             return;
         }
 
         currentTask = order.TaskType;
-        currentState = order.TaskType == SquadTaskType.Pursue
-            ? HunterState.Pursuing
-            : HunterState.Investigating;
+
+        // Check visibility here too: orders cannot enable attacks
+        // through walls.
+        canSeePlayer = CheckPlayerVisibility();
 
         if (TryMeleeAttack())
             return;
+
+        currentState = order.TaskType == SquadTaskType.Pursue
+            ? HunterState.Pursuing
+            : HunterState.Investigating;
 
         if (!TryMoveTo(order.TargetPosition))
             HandleBlocked();
@@ -214,6 +329,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
             path.corners.Length == 0)
             return false;
 
+        lastPathTarget = targetPosition;
         motor.SetPath(path.corners);
         return true;
     }
@@ -235,7 +351,13 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
             currentState != HunterState.Pursuing)
             return;
 
-        // Update state before reporting, so a new order is not overwritten.
+        if (canSeePlayer)
+        {
+            // Continue engagement instead of searching for a visible player.
+            OnTaskArrived?.Invoke(this);
+            return;
+        }
+
         currentState = HunterState.Searching;
         currentTask = SquadTaskType.Investigate;
         searchTimer = searchDuration;
@@ -278,7 +400,8 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
 
     private bool TryMeleeAttack()
     {
-        if (!IsAlive || playerTransform == null ||
+        if (!IsAlive || !canSeePlayer ||
+            playerTransform == null ||
             currentTask != SquadTaskType.Pursue)
             return false;
 
@@ -292,11 +415,11 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         motor.SetFaceTarget(playerTransform);
         currentState = HunterState.Attacking;
 
-        if (Time.time >= nextAttackTime)
+        if (Time.time >= nextAttackTime &&
+            !motor.IsMovementLocked)
         {
             nextAttackTime = Time.time + attackCooldown;
             combat?.Attack(0);
-
             Debug.Log("Hunter: melee attack!");
         }
 

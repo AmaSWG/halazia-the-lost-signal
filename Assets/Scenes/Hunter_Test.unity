@@ -139,7 +139,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &181188738
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -599,6 +599,9 @@ GameObject:
   - component: {fileID: 1579759035}
   - component: {fileID: 1579759037}
   - component: {fileID: 1579759036}
+  - component: {fileID: 1579759040}
+  - component: {fileID: 1579759039}
+  - component: {fileID: 1579759038}
   m_Layer: 0
   m_Name: Hunter
   m_TagString: Untagged
@@ -740,6 +743,14 @@ MonoBehaviour:
   playerTransform: {fileID: 2102605545}
   meleeRange: 1.8
   attackCooldown: 1.2
+  viewDistance: 15
+  viewAngle: 120
+  obstacleMask:
+    serializedVersion: 2
+    m_Bits: 64
+  repathInterval: 0.5
+  targetMoveThreshold: 0.5
+  canSeePlayer: 0
 --- !u!114 &1579759036
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -793,6 +804,66 @@ CharacterController:
   m_SkinWidth: 0.08
   m_MinMoveDistance: 0.001
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!114 &1579759038
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1579759028}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 55c7e06e569f8c041ad83021c584cd27, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Halazia.Shared.Combat.CombatActionsAdapter
+--- !u!114 &1579759039
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1579759028}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 65795b6b5aac4a63882e563baccd8208, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Halazia.Shared.Movement.AgentAnimatorDriver
+  _motorSource: {fileID: 0}
+  _speedParamName: Speed
+  _isMovingParamName: IsMoving
+  _attackTriggerName: Attack
+  _attackTypeParamName: AttackType
+  _hitTriggerName: Hit
+  _isDeadParamName: IsDead
+  _speedDampTime: 0.12
+  _normalizeSpeed: 0
+  _expectedMaxSpeed: 4.2
+  _velXParamName: VelX
+  _velZParamName: VelZ
+  _lockMovementOnAttack: 1
+  _defaultAttackDuration: 0.85
+--- !u!95 &1579759040
+Animator:
+  serializedVersion: 7
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1579759028}
+  m_Enabled: 1
+  m_Avatar: {fileID: 0}
+  m_Controller: {fileID: 0}
+  m_CullingMode: 0
+  m_UpdateMode: 0
+  m_ApplyRootMotion: 0
+  m_LinearVelocityBlending: 0
+  m_StabilizeFeet: 0
+  m_AnimatePhysics: 0
+  m_WarningMessage: 
+  m_HasTransformHierarchy: 1
+  m_AllowConstantClipSamplingOptimization: 1
+  m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0
 --- !u!1 &1671949923
 GameObject:
   m_ObjectHideFlags: 0
@@ -805,7 +876,7 @@ GameObject:
   - component: {fileID: 1671949926}
   - component: {fileID: 1671949925}
   - component: {fileID: 1671949924}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Wall_02
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -1091,7 +1162,7 @@ GameObject:
   - component: {fileID: 1932593506}
   - component: {fileID: 1932593505}
   - component: {fileID: 1932593504}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: Wall_01
   m_TagString: Untagged
   m_Icon: {fileID: 0}
