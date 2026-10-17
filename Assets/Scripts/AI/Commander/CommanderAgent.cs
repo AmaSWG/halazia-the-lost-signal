@@ -5,6 +5,8 @@ using UnityEngine.AI;
 using Halazia.Shared.Combat;
 using Halazia.Shared.Movement;
 using Halazia.Shared.Squad;
+using SharedSquadAgent = Halazia.Shared.Squad.ISquadAgent;
+
 
 namespace Halazia.AI.Commander
 {
@@ -17,7 +19,7 @@ namespace Halazia.AI.Commander
     /// </summary>
     [RequireComponent(typeof(AgentMotor))]
     [DisallowMultipleComponent]
-    public class CommanderAgent : MonoBehaviour, ISquadAgent
+    public class CommanderAgent : MonoBehaviour, SharedSquadAgent
     {
         [Header("Tactical Perception")]
         [Tooltip("Direct reference or transform of the player to observe.")]
@@ -59,7 +61,7 @@ namespace Halazia.AI.Commander
         [Header("Sub-Systems")]
         [SerializeField] private CorridorHeatmapTracker _heatmapTracker;
 
-        // ISquadAgent implementation for the Commander itself
+        // SharedSquadAgent implementation for the Commander itself
         public string AgentId => "Commander_01";
         public AgentRole Role => AgentRole.Commander;
         public Vector3 Position => transform.position;
@@ -68,6 +70,10 @@ namespace Halazia.AI.Commander
         public bool IsAlive => _currentHealth > 0.001f;
         public bool IsEngagedWithPlayer => _isPlayerDetected;
         public SquadTaskType CurrentTask => _currentSelfTask;
+        public event Action<SharedSquadAgent> OnTaskArrived;
+        public event Action<SharedSquadAgent> OnTaskBlocked;
+        public event Action<SharedSquadAgent> OnTargetLost;
+        public event Action<SharedSquadAgent> OnDied;
 
         [Header("Commander Health & State")]
         [SerializeField] private float _maxHealth = 150f;
@@ -75,7 +81,7 @@ namespace Halazia.AI.Commander
         private SquadTaskType _currentSelfTask = SquadTaskType.Idle;
 
         // Squad tracking
-        private readonly List<ISquadAgent> _registeredSquad = new List<ISquadAgent>();
+        private readonly List<SharedSquadAgent> _registeredSquad = new List<SharedSquadAgent>();
         private SquadUtilityAllocator _utilityAllocator;
         private IAgentMotor _motor;
         private ICombatActions _combatActions;   // Fix 1: resolved at Awake, never AgentAnimatorDriver directly
@@ -84,7 +90,7 @@ namespace Halazia.AI.Commander
         private bool _isPlayerDetected = false;
         private Vector3 _lastKnownPlayerPosition;
         private float _tickTimer = 0f;
-        private readonly Dictionary<ISquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<ISquadAgent, Vector3>();
+        private readonly Dictionary<SharedSquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<SharedSquadAgent, Vector3>();
 
         private void Awake()
         {
@@ -106,7 +112,7 @@ namespace Halazia.AI.Commander
             // Fix 3: Register initial squad and subscribe to their reporting events
             foreach (var mono in _initialSquadMembers)
             {
-                if (mono is ISquadAgent squadAgent)
+                if (mono is SharedSquadAgent squadAgent)
                     RegisterSquadMember(squadAgent);
             }
         }
@@ -236,9 +242,12 @@ namespace Halazia.AI.Commander
         /// Registers a squad member and subscribes to all its reporting events.
         /// Safe to call at runtime (e.g. when a new agent spawns mid-mission).
         /// </summary>
-        public void RegisterSquadMember(ISquadAgent agent)
+        public void RegisterSquadMember(SharedSquadAgent agent)
         {
-            if (agent == null || agent == (ISquadAgent)this || _registeredSquad.Contains(agent)) return;
+            if (agent == null || ReferenceEquals(agent, this) ||
+                _registeredSquad.Contains(agent))
+                return;
+
 
             _registeredSquad.Add(agent);
 
@@ -255,7 +264,7 @@ namespace Halazia.AI.Commander
         /// Unregisters a squad member and unsubscribes from all events.
         /// Call when an agent is destroyed so the Commander holds no dead references.
         /// </summary>
-        public void UnregisterSquadMember(ISquadAgent agent)
+        public void UnregisterSquadMember(SharedSquadAgent agent)
         {
             if (agent == null || !_registeredSquad.Contains(agent)) return;
 
@@ -272,7 +281,7 @@ namespace Halazia.AI.Commander
 
         // ── Event reactions ──────────────────────────────────────────────────────
 
-        private void OnAgentDied(ISquadAgent agent)
+        private void OnAgentDied(SharedSquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' died. Removing from roster and forcing reallocation.");
             UnregisterSquadMember(agent);
@@ -280,19 +289,19 @@ namespace Halazia.AI.Commander
             _tickTimer = _decisionTickInterval;
         }
 
-        private void OnAgentTaskBlocked(ISquadAgent agent)
+        private void OnAgentTaskBlocked(SharedSquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' path blocked on task {agent.CurrentTask}. Forcing reallocation.");
             _tickTimer = _decisionTickInterval;
         }
 
-        private void OnAgentTaskArrived(ISquadAgent agent)
+        private void OnAgentTaskArrived(SharedSquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' arrived at task destination ({agent.CurrentTask}).");
             // Optionally reassign a follow-up task next tick
         }
 
-        private void OnAgentTargetLost(ISquadAgent agent)
+        private void OnAgentTargetLost(SharedSquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' lost sight of target. Switching to Investigate.");
             // Issue an Investigate order at the last known player position
@@ -318,7 +327,7 @@ namespace Halazia.AI.Commander
             List<SquadOrder> orders = FormulateTacticalOrders();
 
             // 4. Filter only currently active and alive squad members (non-destructive)
-            var activeSquad = new List<ISquadAgent>();
+            var activeSquad = new List<SharedSquadAgent>();
             foreach (var agent in _registeredSquad)
             {
                 if (agent != null && agent.IsAlive)
@@ -336,7 +345,7 @@ namespace Halazia.AI.Commander
 
                 foreach (var pair in assignments)
                 {
-                    ISquadAgent agent = pair.Key;
+                    SharedSquadAgent agent = pair.Key;
                     SquadOrder order = pair.Value;
 
                     bool taskChanged = agent.CurrentTask != order.TaskType;
@@ -363,7 +372,7 @@ namespace Halazia.AI.Commander
                 var found = FindObjectsOfType<MonoBehaviour>();
                 foreach (var mb in found)
                 {
-                    if (mb is ISquadAgent squadAgent && (MonoBehaviour)squadAgent != this)
+                    if (mb is SharedSquadAgent squadAgent && (MonoBehaviour)squadAgent != this)
                     {
                         RegisterSquadMember(squadAgent);
                     }
@@ -568,7 +577,7 @@ namespace Halazia.AI.Commander
 
         #endregion
 
-        #region ISquadAgent Interface Methods
+        #region SharedSquadAgent Interface Methods
 
         public void AssignOrder(SquadOrder order)
         {
