@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using Halazia.Shared.Movement;
 using Halazia.Shared.Squad;
+using Halazia.Shared.Combat;
 
 [RequireComponent(typeof(CharacterController))]
 [RequireComponent(typeof(AgentMotor))]
@@ -15,6 +16,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         Searching,
         Returning,
         Pursuing,
+        Attacking,
         Dead
     }
 
@@ -24,6 +26,13 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
     [SerializeField] private string agentId = "Hunter_01";
     [SerializeField] private float maxHealth = 100f;
 
+    [Header("Melee Combat")]
+    [SerializeField] private Transform playerTransform;
+    [SerializeField] private float meleeRange = 1.8f;
+    [SerializeField] private float attackCooldown = 1.2f;
+
+    private ICombatActions combat;
+    private float nextAttackTime;
     private IAgentMotor motor;
     private Vector3 startingPosition;
     private float searchTimer;
@@ -40,7 +49,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         maxHealth > 0f ? Mathf.Clamp01(currentHealth / maxHealth) : 0f;
     public bool IsAlive => currentHealth > 0f;
     public bool IsEngagedWithPlayer =>
-        currentState == HunterState.Pursuing;
+        currentState == HunterState.Pursuing || currentState == HunterState.Attacking;
     public SquadTaskType CurrentTask => currentTask;
 
     public event Action<ISquadAgent> OnTaskArrived;
@@ -53,6 +62,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         motor = GetComponent<IAgentMotor>();
         startingPosition = transform.position;
         currentHealth = maxHealth;
+        combat = GetComponent<ICombatActions>();
     }
 
     private void OnEnable()
@@ -76,6 +86,20 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
 
     private void Update()
     {
+        if (!IsAlive)
+            return;
+
+        if (TryMeleeAttack())
+            return;
+
+        // Player moved out of melee range: resume pursuit.
+        if (currentState == HunterState.Attacking &&
+            playerTransform != null)
+        {
+            AssignOrder(new SquadOrder(
+                SquadTaskType.Pursue, playerTransform.position));
+        }
+
         if (!IsAlive || currentState != HunterState.Searching)
             return;
 
@@ -108,7 +132,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
 
     private void HearSound(Vector3 position, float radius)
     {
-        if (!IsAlive || currentState == HunterState.Pursuing)
+        if (!IsAlive || IsEngagedWithPlayer)
             return;
 
         if (Vector3.Distance(transform.position, position) > radius)
@@ -149,6 +173,9 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         currentState = order.TaskType == SquadTaskType.Pursue
             ? HunterState.Pursuing
             : HunterState.Investigating;
+
+        if (TryMeleeAttack())
+            return;
 
         if (!TryMoveTo(order.TargetPosition))
             HandleBlocked();
@@ -247,5 +274,32 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         currentState = HunterState.Dead;
         currentTask = SquadTaskType.Idle;
         OnDied?.Invoke(this);
+    }
+
+    private bool TryMeleeAttack()
+    {
+        if (!IsAlive || playerTransform == null ||
+            currentTask != SquadTaskType.Pursue)
+            return false;
+
+        float distance = Vector3.Distance(
+            transform.position, playerTransform.position);
+
+        if (distance > meleeRange)
+            return false;
+
+        motor.Stop();
+        motor.SetFaceTarget(playerTransform);
+        currentState = HunterState.Attacking;
+
+        if (Time.time >= nextAttackTime)
+        {
+            nextAttackTime = Time.time + attackCooldown;
+            combat?.Attack(0);
+
+            Debug.Log("Hunter: melee attack!");
+        }
+
+        return true;
     }
 }
