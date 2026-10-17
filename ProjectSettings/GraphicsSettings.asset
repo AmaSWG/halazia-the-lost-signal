@@ -46,11 +46,7 @@ GraphicsSettings:
   m_WarmupProgressivelyLimit: -1
   m_CacheMissCollectionPath: CacheMissCollection
   m_SpritesDefaultMaterial: {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}
-<<<<<<< Updated upstream
   m_CustomRenderPipeline: {fileID: 0}
-=======
-  m_CustomRenderPipeline: {fileID: 11400000, guid: 4b83569d67af61e458304325a23e5dfd, type: 2}
->>>>>>> Stashed changes
   m_TransparencySortMode: 0
   m_TransparencySortAxis: {x: 0, y: 0, z: 1}
   m_DefaultRenderingPath: 1
@@ -59,11 +55,7 @@ GraphicsSettings:
   m_LightmapStripping: 0
   m_FogStripping: 0
   m_InstancingStripping: 0
-<<<<<<< Updated upstream
   m_BrgStripping: 2
-=======
-  m_BrgStripping: 0
->>>>>>> Stashed changes
   m_DefaultLightBaker: 0
   m_LightmapKeepPlain: 1
   m_LightmapKeepDirCombined: 1
@@ -76,11 +68,7 @@ GraphicsSettings:
   m_FogKeepExp2: 1
   m_AlbedoSwatchInfos: []
   m_RenderPipelineGlobalSettingsMap:
-<<<<<<< Updated upstream
     UnityEngine.Rendering.Universal.UniversalRenderPipeline: {fileID: 11400000, guid: 82b47c505064c6b4b95fa40c8a5f8292, type: 2}
-=======
-    UnityEngine.Rendering.Universal.UniversalRenderPipeline: {fileID: 11400000, guid: 48337328af0c9fd46af1c480b00dbebe, type: 2}
->>>>>>> Stashed changes
   m_ShaderBuildSettings:
     keywordDeclarationOverrides: []
     numInternalDefines: 0

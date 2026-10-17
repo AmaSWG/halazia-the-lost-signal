@@ -29,18 +29,10 @@ EditorSettings:
   m_EnterPlayModeOptionsEnabled: 1
   m_EnterPlayModeOptions: 3
   m_GameObjectNamingDigits: 1
-<<<<<<< Updated upstream
   m_GameObjectNamingScheme: 0
   m_AssetNamingUsesSpace: 1
   m_InspectorUseIMGUIDefaultInspector: 0
   m_UseLegacyProbeSampleCount: 0
-=======
-  m_GameObjectNamingScheme: 2
-  m_AssetNamingUsesSpace: 0
-  m_InspectorUseIMGUIDefaultInspector: 0
-  m_UseLegacyProbeSampleCount: 0
-  m_SerializeInlineMappingsOnOneLine: 1
->>>>>>> Stashed changes
   m_DisableCookiesInLightmapper: 0
   m_ShadowmaskStitching: 0
   m_AssetPipelineMode: 1
@@ -57,9 +49,5 @@ EditorSettings:
   m_EnableEnlightenBakedGI: 0
   m_ReferencedClipsExactNaming: 1
   m_ForceAssetUnloadAndGCOnSceneLoad: 1
-<<<<<<< Updated upstream
   m_HideBuildProfileClassicPlatforms: 1
   m_UseLegacyHierarchy: 0
-=======
-  m_HideBuildProfileClassicPlatforms: 0
->>>>>>> Stashed changes

@@ -2,10 +2,6 @@
 %TAG !u! tag:unity3d.com,2011:
 --- !u!78 &1
 TagManager:
-<<<<<<< Updated upstream
-  serializedVersion: 2
-  tags: []
-=======
   serializedVersion: 3
   tags:
   - CinemachineTarget
@@ -14,7 +10,6 @@ TagManager:
   - Hidden_Area_3
   - Cube_Spawn_Point_1
   - Cube_Spawn_Point_2
->>>>>>> Stashed changes
   layers:
   - Default
   - TransparentFX
@@ -61,7 +56,6 @@ TagManager:
   - Light Layer 5
   - Light Layer 6
   - Light Layer 7
-<<<<<<< Updated upstream
   - 
   - 
   - 
@@ -86,5 +80,3 @@ TagManager:
   - 
   - 
   - 
-=======
->>>>>>> Stashed changes
