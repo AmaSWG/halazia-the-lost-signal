@@ -57,6 +57,10 @@ namespace Halazia.Shared.Movement
         [Tooltip("Continuous duration (seconds) spent stuck before firing OnPathBlocked.")]
         [SerializeField] private float _stuckTimeout = 0.8f;
 
+        [Header("Strafe / Retreat Mode")]
+        [Tooltip("Speed multiplier applied when the agent is strafing (e.g. retreating while facing player). 1.0 = full speed.")]
+        [SerializeField] private float _strafeSpeedMultiplier = 0.60f;
+
         [Header("Debug Visualization")]
         [SerializeField] private bool _drawDebugGizmos = true;
         [SerializeField] private Color _gizmoPathColor = new Color(0f, 0.8f, 1f, 0.9f);
@@ -92,21 +96,63 @@ namespace Halazia.Shared.Movement
         private float _stuckDuration = 0f;
         private Vector3 _positionAtLastSample;
 
+        // Strafe / Facing-Lock Mode
+        private bool _isStrafeMode = false;
+
         // Public Interface Properties
         public bool IsMoving => _isMoving && !_isMovementLocked;
         public bool IsMovementLocked => _isMovementLocked;
+        public bool IsStrafeMode => _isStrafeMode;
         public Vector3 Velocity => _actualVelocity;
+        public Vector3 LocalVelocity => transform.InverseTransformDirection(_actualVelocity);
         public float CurrentSpeed => _currentForwardSpeed;
         public Vector3 TargetDestination => _targetDestination;
 
         public void SetMovementLocked(bool locked)
         {
+            bool wasLocked = _isMovementLocked;
             _isMovementLocked = locked;
+
+            // On unlock: reset stuck-detection state to prevent false OnPathBlocked events caused by
+            // zero-displacement accumulated during the attack animation window.
+            if (wasLocked && !locked)
+            {
+                _stuckDuration = 0f;
+                _stuckSampleTimer = 0f;
+                _positionAtLastSample = transform.position;
+            }
         }
 
         public void SetSpeedModifier(float multiplier)
         {
             _speedModifier = Mathf.Max(0f, multiplier);
+        }
+
+        /// <summary>
+        /// Enables strafe mode: the agent continues to follow its NavMesh waypoints in world space
+        /// but rotates toward <paramref name="faceTarget"/> instead of the movement direction.
+        /// A backward-speed multiplier is applied automatically.
+        /// Call SetStrafe(false) to restore forward-facing locomotion.
+        /// </summary>
+        public void SetStrafe(bool enabled, Transform faceTarget = null)
+        {
+            _isStrafeMode = enabled;
+            if (enabled)
+            {
+                if (faceTarget != null)
+                {
+                    _faceTargetTransform = faceTarget;
+                    _faceTargetPosition  = null;
+                }
+            }
+            else
+            {
+                // Exiting strafe: clear the strafe face target so normal
+                // movement-direction facing resumes.  The caller can set a
+                // new face target explicitly afterwards if needed.
+                _faceTargetTransform = null;
+                _faceTargetPosition  = null;
+            }
         }
 
         private void Awake()
@@ -325,7 +371,7 @@ namespace Halazia.Shared.Movement
                 speed = Mathf.Min(speed, _maxSpeed * Mathf.Sqrt(brakeFactor));
             }
 
-            // 2. Corner slowdown for intermediate waypoints (prevents sliding out of ship corridor bulkheads)
+            // 2. Corner slowdown for intermediate waypoints
             if (!isLastWaypoint && _currentWaypointIndex < _pathWaypoints.Count - 1)
             {
                 Vector3 currentDir = (Flatten(_pathWaypoints[_currentWaypointIndex]) - Flatten(transform.position)).normalized;
@@ -334,14 +380,15 @@ namespace Halazia.Shared.Movement
                 if (currentDir.sqrMagnitude > 0.001f && nextDir.sqrMagnitude > 0.001f)
                 {
                     float dot = Vector3.Dot(currentDir, nextDir);
-                    // Map dot [-1, 1] to corner factor [0, 1]: (1 + cos(theta)) / 2
                     float cornerFactor = Mathf.Clamp01((1.0f + dot) * 0.5f);
                     float cornerSpeed = Mathf.Lerp(_minCornerSpeed, _maxSpeed, cornerFactor);
                     speed = Mathf.Min(speed, cornerSpeed);
                 }
             }
 
-            return speed * _speedModifier;
+            // 3. Apply user speed modifier and, if in strafe/retreat mode, the strafe multiplier
+            float strafeFactor = _isStrafeMode ? _strafeSpeedMultiplier : 1.0f;
+            return speed * _speedModifier * strafeFactor;
         }
 
         private float CalculateRemainingDistance(Vector3 flatSelf)

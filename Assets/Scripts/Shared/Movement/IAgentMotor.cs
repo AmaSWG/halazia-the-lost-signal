@@ -43,19 +43,35 @@ namespace Halazia.Shared.Movement
         void SetSpeedModifier(float multiplier);
 
         /// <summary>
+        /// Enables or disables strafe mode. In strafe mode the agent still follows its NavMesh waypoints
+        /// in world space but rotates toward <paramref name="faceTarget"/> instead of the movement direction.
+        /// A configurable backward-speed multiplier is applied automatically while strafing.
+        /// Pass <c>false</c> to restore normal forward-facing locomotion.
+        /// </summary>
+        /// <param name="enabled">True to enable strafe; false to restore forward-facing mode.</param>
+        /// <param name="faceTarget">Transform to look at while moving. Pass null to clear.</param>
+        void SetStrafe(bool enabled, Transform faceTarget = null);
+
+        /// <summary>
         /// True if forward movement is currently locked (e.g. during an attack animation).
         /// </summary>
         bool IsMovementLocked { get; }
 
-        /// <summary>
-        /// True if the agent is actively following a path towards a destination.
-        /// </summary>
+        /// <summary>True if the agent is actively following a path towards a destination.</summary>
         bool IsMoving { get; }
 
-        /// <summary>
-        /// Current 3D velocity vector of the agent (m/s).
-        /// </summary>
+        /// <summary>True while strafe mode is active.</summary>
+        bool IsStrafeMode { get; }
+
+        /// <summary>Current 3D velocity vector of the agent (m/s).</summary>
         Vector3 Velocity { get; }
+
+        /// <summary>
+        /// Velocity in the agent's LOCAL coordinate space (m/s).
+        /// X = right strafe, Z = forward (negative Z = backward).
+        /// Feed into VelX / VelZ animator parameters for a 2D Freeform Directional blend tree.
+        /// </summary>
+        Vector3 LocalVelocity { get; }
 
         /// <summary>
         /// Current scalar horizontal speed (m/s).
