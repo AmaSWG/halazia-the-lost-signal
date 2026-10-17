@@ -47,6 +47,13 @@ namespace Halazia.Shared.Movement
         [Tooltip("Expected maximum speed in m/s used for normalization.")]
         [SerializeField] private float _expectedMaxSpeed = 4.2f;
 
+        [Header("Strafe / 2D Blend Tree Parameters")]
+        [Tooltip("Float parameter name for local-space right/left velocity (X axis). Used for 2D Freeform Directional blend tree.")]
+        [SerializeField] private string _velXParamName = "VelX";
+
+        [Tooltip("Float parameter name for local-space forward/backward velocity (Z axis). Negative = retreating.")]
+        [SerializeField] private string _velZParamName = "VelZ";
+
         [Header("Attack Locomotion Lock")]
         [Tooltip("If true, temporarily locks motor translation during attack animations to eliminate sliding.")]
         [SerializeField] private bool _lockMovementOnAttack = true;
@@ -77,6 +84,10 @@ namespace Halazia.Shared.Movement
         private bool _hasAttackTypeParam;
         private bool _hasHitTrigger;
         private bool _hasIsDeadParam;
+        private int _velXParamHash;
+        private int _velZParamHash;
+        private bool _hasVelXParam;
+        private bool _hasVelZParam;
 
         private void Awake()
         {
@@ -92,22 +103,27 @@ namespace Halazia.Shared.Movement
                 _motor = GetComponent<IAgentMotor>() ?? GetComponentInParent<IAgentMotor>();
             }
 
-            // Cache parameter hashes
-            _speedParamHash = Animator.StringToHash(_speedParamName);
-            _isMovingParamHash = Animator.StringToHash(_isMovingParamName);
-            _attackTriggerHash = Animator.StringToHash(_attackTriggerName);
+            // Cache parameter hashes (avoids string allocation & lookup per frame)
+            _speedParamHash      = Animator.StringToHash(_speedParamName);
+            _isMovingParamHash   = Animator.StringToHash(_isMovingParamName);
+            _attackTriggerHash   = Animator.StringToHash(_attackTriggerName);
             _attackTypeParamHash = Animator.StringToHash(_attackTypeParamName);
-            _hitTriggerHash = Animator.StringToHash(_hitTriggerName);
-            _isDeadParamHash = Animator.StringToHash(_isDeadParamName);
+            _hitTriggerHash      = Animator.StringToHash(_hitTriggerName);
+            _isDeadParamHash     = Animator.StringToHash(_isDeadParamName);
+            _velXParamHash       = Animator.StringToHash(_velXParamName);
+            _velZParamHash       = Animator.StringToHash(_velZParamName);
 
             // Verify parameter existence on Controller to avoid runtime warnings
-            _hasSpeedParam = HasParameter(_animator, _speedParamHash);
-            _hasIsMovingParam = HasParameter(_animator, _isMovingParamHash);
-            _hasAttackTrigger = HasParameter(_animator, _attackTriggerHash);
+            _hasSpeedParam      = HasParameter(_animator, _speedParamHash);
+            _hasIsMovingParam   = HasParameter(_animator, _isMovingParamHash);
+            _hasAttackTrigger   = HasParameter(_animator, _attackTriggerHash);
             _hasAttackTypeParam = HasParameter(_animator, _attackTypeParamHash);
-            _hasHitTrigger = HasParameter(_animator, _hitTriggerHash);
-            _hasIsDeadParam = HasParameter(_animator, _isDeadParamHash);
+            _hasHitTrigger      = HasParameter(_animator, _hitTriggerHash);
+            _hasIsDeadParam     = HasParameter(_animator, _isDeadParamHash);
+            _hasVelXParam       = HasParameter(_animator, _velXParamHash);
+            _hasVelZParam       = HasParameter(_animator, _velZParamHash);
         }
+
 
         private void Update()
         {
@@ -135,9 +151,28 @@ namespace Halazia.Shared.Movement
             {
                 _animator.SetBool(_isMovingParamHash, _motor.IsMoving);
             }
+
+            // 3. Feed local-space velocity into VelX / VelZ for 2D Freeform Directional blend tree.
+            //    Normalized by max speed so the blend tree range is [-1, 1] on both axes.
+            if (_hasVelXParam || _hasVelZParam)
+            {
+                Vector3 localVel = _motor.LocalVelocity;
+                float normFactor = _expectedMaxSpeed > 0.01f ? 1.0f / _expectedMaxSpeed : 1.0f;
+
+                if (_hasVelXParam)
+                    _animator.SetFloat(_velXParamHash, localVel.x * normFactor, _speedDampTime, deltaTime);
+                if (_hasVelZParam)
+                    _animator.SetFloat(_velZParamHash, localVel.z * normFactor, _speedDampTime, deltaTime);
+            }
         }
 
         #region Combat & Attack Action Triggers
+
+        /// <summary>
+        /// Fires an attack animation on the Animator and coordinates movement locking with the motor.
+        /// </summary>
+        /// <param name="attackType">Index selecting specific attack variation (0=Light Melee, 1=Heavy Slash, 2=Shot).</param>
+        public void PlayAttack(int attackType = 0) => TriggerAttack(attackType);
 
         /// <summary>
         /// Fires an attack animation on the Animator and coordinates movement locking with the motor.
