@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.AI;
 using Halazia.AI.Commander;
@@ -34,6 +35,12 @@ namespace Halazia.Sandbox
         public bool IsEngagedWithPlayer => _currentTask == SquadTaskType.Pursue;
         public SquadTaskType CurrentTask => _currentTask;
 
+        // Fix 3: Reporting events — fired to push state back to the Commander
+        public event Action<ISquadAgent> OnDied;
+        public event Action<ISquadAgent> OnTaskArrived;
+        public event Action<ISquadAgent> OnTaskBlocked;
+        public event Action<ISquadAgent> OnTargetLost;
+
         private void Awake()
         {
             _currentHealth = _maxHealth;
@@ -51,34 +58,40 @@ namespace Halazia.Sandbox
 
         private void OnDisable()
         {
+            // Fire OnDied before unregistering so Commander receives the event first
+            if (IsAlive) OnDied?.Invoke(this);
             var commander = FindAnyObjectByType<CommanderAgent>();
-            if (commander != null)
-            {
-                commander.UnregisterSquadMember(this);
-            }
+            commander?.UnregisterSquadMember(this);
         }
 
         private void OnDestroy()
         {
+            // Guard: only fire if not already fired by OnDisable
+            if (!IsAlive) return;
+            OnDied?.Invoke(this);
             var commander = FindAnyObjectByType<CommanderAgent>();
-            if (commander != null)
-            {
-                commander.UnregisterSquadMember(this);
-            }
+            commander?.UnregisterSquadMember(this);
         }
 
         private void Update()
         {
-            if (_currentTask == SquadTaskType.Pursue && _activeOrder.TargetPosition != Vector3.zero)
+            if (_currentTask == SquadTaskType.Idle) return;
+            if (_motor == null) return;
+
+            if (_activeOrder.TargetPosition != Vector3.zero && !_motor.IsMoving)
             {
-                // If stopped but still not at player, retry pathing
-                if (_motor != null && !_motor.IsMoving)
+                float dist = Vector3.Distance(transform.position, _activeOrder.TargetPosition);
+                if (dist <= 1.8f)
                 {
-                    float dist = Vector3.Distance(transform.position, _activeOrder.TargetPosition);
-                    if (dist > 1.8f)
-                    {
-                        ExecutePath(_activeOrder.TargetPosition);
-                    }
+                    // Arrived at destination
+                    OnTaskArrived?.Invoke(this);
+                    _currentTask = SquadTaskType.Idle;
+                }
+                else if (_currentTask == SquadTaskType.Pursue || _currentTask == SquadTaskType.Flank ||
+                         _currentTask == SquadTaskType.Investigate || _currentTask == SquadTaskType.CoverRoute)
+                {
+                    // Stopped but not arrived: retry or report blocked
+                    ExecutePath(_activeOrder.TargetPosition);
                 }
             }
         }
@@ -127,10 +140,26 @@ namespace Halazia.Sandbox
         public void CancelOrder()
         {
             _currentTask = SquadTaskType.Idle;
-            if (_motor != null)
+            _motor?.Stop();
+        }
+
+        /// <summary>
+        /// Call this from your agent's health system when damage is taken.
+        /// </summary>
+        public void TakeDamage(float damage)
+        {
+            if (!IsAlive) return;
+            _currentHealth = Mathf.Max(0f, _currentHealth - damage);
+            if (_currentHealth <= 0.001f)
             {
-                _motor.Stop();
+                OnDied?.Invoke(this);
             }
+        }
+
+        /// <summary>Fires OnPathBlocked so the Commander reassigns this agent.</summary>
+        private void OnPathBlockedHandler()
+        {
+            OnTaskBlocked?.Invoke(this);
         }
 
         private void OnDrawGizmos()

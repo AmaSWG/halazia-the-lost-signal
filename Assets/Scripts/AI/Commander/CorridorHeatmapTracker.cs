@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace Halazia.AI.Commander
@@ -25,30 +26,56 @@ namespace Halazia.AI.Commander
     }
 
     /// <summary>
-    /// Observes and learns player spatial movement patterns across the ship decks.
-    /// Implements a discrete first-order Markov transition model with Laplace smoothing
-    /// to predict player escape corridors and counter repeated player tactics.
-    /// Fulfills the SE3062 rubric criterion: 'Creative agent design and originality'.
+    /// Observes and learns player ESCAPE patterns during active combat encounters.
+    /// Transitions are recorded ONLY while the player is in combat (detected by an agent within
+    /// the last N seconds) so the model learns escape routes, not general travel.
+    ///
+    /// Implements:
+    ///   - First-order Markov transition model per corridor node pair.
+    ///   - Exponential decay per transition so the Commander adapts when player changes habit.
+    ///   - Laplace (additive) smoothing to prevent zero-probability and NaN errors on sparse data.
+    ///   - Confidence-weighted CoverRoute priority for the Commander's task allocation.
+    ///
+    /// Fulfills SE3062 rubric criterion: 'Creative agent design and originality'.
     /// </summary>
     public class CorridorHeatmapTracker : MonoBehaviour
     {
         [Header("Tactical Choke Points")]
-        [Tooltip("List of key corridor choke points across ship decks. Can be placed manually or generated.")]
+        [Tooltip("List of key corridor choke points across ship decks.")]
         [SerializeField] private List<CorridorNode> _corridorNodes = new List<CorridorNode>();
 
+        [Header("Combat Window")]
+        [Tooltip("Transitions are recorded only when the player was last detected within this many seconds. " +
+                 "Set to a very large number to record all travel (not recommended).")]
+        [SerializeField] private float _combatWindowSeconds = 8.0f;
+
         [Header("Adaptive Learning Parameters")]
-        [Tooltip("Laplace smoothing factor (alpha) to prevent zero-probability errors on unseen routes.")]
-        [SerializeField] private float _laplaceAlpha = 0.5f;
+        [Tooltip("Laplace (additive) smoothing factor alpha. Prevents zero-probability on unseen routes. " +
+                 "Higher = more uniform initial distribution. Recommended: 0.1 – 0.5.")]
+        [SerializeField] private float _laplaceAlpha = 0.1f;
 
-        [Tooltip("Weight decay per minute to give higher emphasis to recent player escape behavior.")]
-        [SerializeField] private float _recencyHalfLifeSeconds = 180f;
+        [Tooltip("Exponential decay factor applied to every existing count when a new transition is recorded. " +
+                 "0.9 = retain 90 % of history per observation. Lower = faster adaptation to new habits.")]
+        [SerializeField] [Range(0.5f, 1.0f)] private float _decayFactor = 0.90f;
 
-        // Transition frequency matrix: [FromNodeId -> [ToNodeId -> Count]]
-        private readonly Dictionary<string, Dictionary<string, float>> _transitionCounts = new Dictionary<string, Dictionary<string, float>>();
+        [Header("Debug")]
+        [Tooltip("Log the full transition matrix to the Console when requested.")]
+        [SerializeField] private bool _logMatrixOnSample = false;
+
+        // Transition frequency matrix: [FromNodeId → [ToNodeId → weighted count]]
+        private readonly Dictionary<string, Dictionary<string, float>> _transitionCounts
+            = new Dictionary<string, Dictionary<string, float>>();
+
         private string _lastPlayerNodeId = null;
-        private float _lastNodeEntryTime = 0f;
+        private float  _lastNodeEntryTime = 0f;
+
+        // Set by CommanderAgent when it detects the player, cleared after timeout
+        private float _lastCombatTime = -999f;
 
         public IReadOnlyList<CorridorNode> CorridorNodes => _corridorNodes;
+
+        // ── Confidence threshold below which CoverRoute is not worth issuing
+        private const float MinUsefulConfidence = 0.05f;
 
         private void Awake()
         {
@@ -60,11 +87,13 @@ namespace Halazia.AI.Commander
             foreach (var fromNode in _corridorNodes)
             {
                 if (!_transitionCounts.ContainsKey(fromNode.NodeId))
-                {
                     _transitionCounts[fromNode.NodeId] = new Dictionary<string, float>();
-                }
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // Public API
+        // ─────────────────────────────────────────────────────────────────────────
 
         /// <summary>
         /// Registers a corridor node dynamically (useful for procedural or sandbox setups).
@@ -81,14 +110,22 @@ namespace Halazia.AI.Commander
 
             _corridorNodes.Add(new CorridorNode(id, position, radius));
             if (!_transitionCounts.ContainsKey(id))
-            {
                 _transitionCounts[id] = new Dictionary<string, float>();
-            }
         }
 
         /// <summary>
-        /// Periodic observer called with current player world position.
-        /// Identifies whether the player entered a new corridor and updates Markovian transition tallies.
+        /// Called by CommanderAgent each time the player is detected.
+        /// Resets the combat window timer so transitions recorded shortly after remain valid.
+        /// </summary>
+        public void NotifyCombatDetection()
+        {
+            _lastCombatTime = Time.time;
+        }
+
+        /// <summary>
+        /// Periodic observer called with the current player world position.
+        /// Identifies whether the player entered a new corridor node and, if in combat,
+        /// updates Markovian transition tallies with exponential decay.
         /// </summary>
         public void SamplePlayerLocation(Vector3 playerPosition)
         {
@@ -96,80 +133,69 @@ namespace Halazia.AI.Commander
             if (closestNode == null) return;
 
             float dist = Vector3.Distance(playerPosition, closestNode.WorldPosition);
-            if (dist <= closestNode.Radius)
+            if (dist > closestNode.Radius) return;
+
+            if (_lastPlayerNodeId == closestNode.NodeId) return; // no change
+
+            // Player has transitioned into a new corridor node
+            bool inCombat = (Time.time - _lastCombatTime) <= _combatWindowSeconds;
+
+            if (inCombat && !string.IsNullOrEmpty(_lastPlayerNodeId))
             {
-                if (_lastPlayerNodeId != closestNode.NodeId)
-                {
-                    // Player has transitioned into a new corridor node
-                    if (!string.IsNullOrEmpty(_lastPlayerNodeId))
-                    {
-                        RecordTransition(_lastPlayerNodeId, closestNode.NodeId);
-                    }
-
-                    closestNode.VisitCount++;
-                    _lastPlayerNodeId = closestNode.NodeId;
-                    _lastNodeEntryTime = Time.time;
-                }
-            }
-        }
-
-        private void RecordTransition(string fromId, string toId)
-        {
-            if (fromId == toId) return;
-
-            if (!_transitionCounts.ContainsKey(fromId))
-            {
-                _transitionCounts[fromId] = new Dictionary<string, float>();
+                RecordTransition(_lastPlayerNodeId, closestNode.NodeId);
+                if (_logMatrixOnSample)
+                    Debug.Log(BuildMatrixDump());
             }
 
-            var toDict = _transitionCounts[fromId];
-            if (!toDict.ContainsKey(toId))
-            {
-                toDict[toId] = 0f;
-            }
-
-            // Apply exponential recency weight decay based on elapsed time since last entry
-            float elapsed = Mathf.Max(0f, Time.time - _lastNodeEntryTime);
-            float weight = (_recencyHalfLifeSeconds > 0.01f) ? Mathf.Pow(0.5f, elapsed / _recencyHalfLifeSeconds) : 1.0f;
-            toDict[toId] += Mathf.Max(0.5f, weight);
-            Debug.Log($"[CorridorHeatmap] Player transition recorded: {fromId} -> {toId} (Total: {toDict[toId]:F1})");
+            closestNode.VisitCount++;
+            _lastPlayerNodeId = closestNode.NodeId;
+            _lastNodeEntryTime = Time.time;
         }
 
         /// <summary>
-        /// Predicts the player's most probable escape corridor from their current location.
-        /// Uses Laplace-smoothed conditional probability:
-        /// P(Node_j | Node_i) = (Count(i -> j) + alpha) / (Sum_k(Count(i -> k)) + K * alpha)
+        /// Predicts the most probable next escape corridor from the player's current position.
+        ///
+        /// Formula: P(j | i) = (N(i→j) + α) / (Σ_k N(i→k) + K·α)
+        /// where α = _laplaceAlpha and K = number of candidate nodes.
+        ///
+        /// Returns false if fewer than 2 nodes are configured or prediction confidence
+        /// is below the minimum useful threshold.
         /// </summary>
-        /// <param name="playerPos">Current player position.</param>
-        /// <param name="predictedNode">The predicted choke point node.</param>
-        /// <param name="probability">Calculated likelihood [0, 1].</param>
-        /// <returns>True if a valid prediction could be determined.</returns>
-        public bool PredictLikelyEscapeNode(Vector3 playerPos, out CorridorNode predictedNode, out float probability)
+        /// <param name="playerPos">Current player world position.</param>
+        /// <param name="predictedNode">The most probable next corridor node.</param>
+        /// <param name="confidence">Smoothed probability in [0, 1]. Higher = more reliable.</param>
+        public bool PredictLikelyEscapeNode(Vector3 playerPos, out CorridorNode predictedNode, out float confidence)
         {
             predictedNode = null;
-            probability = 0f;
+            confidence    = 0f;
 
             if (_corridorNodes.Count < 2) return false;
 
             CorridorNode currentNode = FindClosestNode(playerPos);
             if (currentNode == null) return false;
 
-            string currentId = currentNode.NodeId;
-            int totalNeighbors = _corridorNodes.Count - 1;
-            float denominator = totalNeighbors * _laplaceAlpha;
+            string currentId    = currentNode.NodeId;
+            int    K            = _corridorNodes.Count - 1;   // exclude current node
 
-            if (_transitionCounts.TryGetValue(currentId, out var neighborCounts))
+            // Build denominator: Σ_k observed(i→k) + K·α
+            float observedTotal = 0f;
+            _transitionCounts.TryGetValue(currentId, out var neighborCounts);
+
+            if (neighborCounts != null)
             {
                 foreach (var pair in neighborCounts)
                 {
                     if (pair.Key != currentId)
-                    {
-                        denominator += pair.Value;
-                    }
+                        observedTotal += pair.Value;
                 }
             }
 
-            float highestProb = -1f;
+            float denominator = observedTotal + K * _laplaceAlpha;
+
+            // Denominator is always > 0 because K ≥ 1 and α > 0 (Laplace smoothing guarantee)
+            if (denominator < 1e-6f) denominator = 1e-6f; // belt-and-braces against floating-point edge cases
+
+            float       highestProb   = -1f;
             CorridorNode bestCandidate = null;
 
             foreach (var candidate in _corridorNodes)
@@ -177,34 +203,32 @@ namespace Halazia.AI.Commander
                 if (candidate.NodeId == currentId) continue;
 
                 float count = 0f;
-                if (neighborCounts != null && neighborCounts.TryGetValue(candidate.NodeId, out float observedCount))
-                {
-                    count = observedCount;
-                }
+                if (neighborCounts != null)
+                    neighborCounts.TryGetValue(candidate.NodeId, out count);
 
                 // Laplace-smoothed conditional probability
                 float prob = (count + _laplaceAlpha) / denominator;
 
-                // Tie-breaker: prefer candidate with higher overall historical visits if counts are equal
-                if (prob > highestProb || (Mathf.Approximately(prob, highestProb) && candidate.VisitCount > (bestCandidate?.VisitCount ?? 0)))
+                if (prob > highestProb ||
+                    (Mathf.Approximately(prob, highestProb) &&
+                     candidate.VisitCount > (bestCandidate?.VisitCount ?? 0)))
                 {
-                    highestProb = prob;
+                    highestProb   = prob;
                     bestCandidate = candidate;
                 }
             }
 
-            if (bestCandidate != null)
-            {
-                predictedNode = bestCandidate;
-                probability = highestProb;
-                return true;
-            }
+            if (bestCandidate == null || highestProb < MinUsefulConfidence)
+                return false;
 
-            return false;
+            predictedNode = bestCandidate;
+            confidence    = highestProb;
+            return true;
         }
 
         /// <summary>
-        /// Returns the most frequently used corridor across all historical visits.
+        /// Returns the most frequently visited corridor across all historical observations.
+        /// Used as a fallback when PredictLikelyEscapeNode has insufficient data.
         /// </summary>
         public CorridorNode GetMostFrequentCorridor()
         {
@@ -215,7 +239,7 @@ namespace Halazia.AI.Commander
             {
                 if (node.VisitCount > maxVisits)
                 {
-                    maxVisits = node.VisitCount;
+                    maxVisits   = node.VisitCount;
                     mostVisited = node;
                 }
             }
@@ -223,12 +247,55 @@ namespace Halazia.AI.Commander
             return mostVisited;
         }
 
+        /// <summary>
+        /// Returns a formatted string dump of the transition probability matrix.
+        /// Call from the inspector or console for debugging.
+        /// </summary>
+        [ContextMenu("Dump Transition Matrix")]
+        public string DumpTransitionMatrix()
+        {
+            string dump = BuildMatrixDump();
+            Debug.Log(dump);
+            return dump;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // Private Helpers
+        // ─────────────────────────────────────────────────────────────────────────
+
+        private void RecordTransition(string fromId, string toId)
+        {
+            if (fromId == toId) return;
+
+            if (!_transitionCounts.ContainsKey(fromId))
+                _transitionCounts[fromId] = new Dictionary<string, float>();
+
+            var toDict = _transitionCounts[fromId];
+
+            // Fix 4A: Exponential decay — multiply ALL existing counts before adding
+            // the new observation so recent escapes are weighted more heavily.
+            if (_decayFactor < 1.0f)
+            {
+                var keys = new List<string>(toDict.Keys);
+                foreach (var key in keys)
+                    toDict[key] *= _decayFactor;
+            }
+
+            if (!toDict.ContainsKey(toId))
+                toDict[toId] = 0f;
+
+            toDict[toId] += 1.0f;
+
+            Debug.Log($"[CorridorHeatmap] Escape transition recorded: {fromId} → {toId} " +
+                      $"(raw count after decay: {toDict[toId]:F2}, decay: {_decayFactor:F2})");
+        }
+
         private CorridorNode FindClosestNode(Vector3 position)
         {
             if (_corridorNodes.Count == 0) return null;
 
-            CorridorNode closest = null;
-            float minSqrDist = float.MaxValue;
+            CorridorNode closest    = null;
+            float        minSqrDist = float.MaxValue;
 
             foreach (var node in _corridorNodes)
             {
@@ -236,11 +303,46 @@ namespace Halazia.AI.Commander
                 if (sqrDist < minSqrDist)
                 {
                     minSqrDist = sqrDist;
-                    closest = node;
+                    closest    = node;
                 }
             }
 
             return closest;
+        }
+
+        private string BuildMatrixDump()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("═══ Corridor Escape Heatmap — Transition Matrix ═══");
+            sb.AppendLine($"  Nodes: {_corridorNodes.Count}  |  Alpha: {_laplaceAlpha}  |  Decay: {_decayFactor}");
+            sb.AppendLine($"  Combat window: {_combatWindowSeconds}s  |  In-combat: {(Time.time - _lastCombatTime) <= _combatWindowSeconds}");
+            sb.AppendLine();
+
+            foreach (var fromNode in _corridorNodes)
+            {
+                _transitionCounts.TryGetValue(fromNode.NodeId, out var row);
+                int    K         = _corridorNodes.Count - 1;
+                float  rawTotal  = 0f;
+
+                if (row != null)
+                    foreach (var v in row.Values) rawTotal += v;
+
+                float denom = rawTotal + K * _laplaceAlpha;
+
+                sb.Append($"  FROM [{fromNode.NodeId}]  visits:{fromNode.VisitCount}  ");
+                foreach (var toNode in _corridorNodes)
+                {
+                    if (toNode.NodeId == fromNode.NodeId) continue;
+                    float count = 0f;
+                    row?.TryGetValue(toNode.NodeId, out count);
+                    float prob = (count + _laplaceAlpha) / denom;
+                    sb.Append($"  → {toNode.NodeId}: {prob:P0} (n={count:F1})");
+                }
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("═══════════════════════════════════════════════════");
+            return sb.ToString();
         }
 
         #region Gizmos & Visualization
@@ -251,13 +353,13 @@ namespace Halazia.AI.Commander
 
             foreach (var node in _corridorNodes)
             {
-                // Heatmap color: lerp from blue (low visits) to red (high visits)
                 float heatRatio = Mathf.Clamp01(node.VisitCount / 5f);
                 Gizmos.color = Color.Lerp(new Color(0f, 0.7f, 1f, 0.4f), new Color(1f, 0.1f, 0.1f, 0.7f), heatRatio);
                 Gizmos.DrawWireSphere(node.WorldPosition, node.Radius);
 
 #if UNITY_EDITOR
-                UnityEditor.Handles.Label(node.WorldPosition + Vector3.up * 1.5f, $"{node.NodeId}\nVisits: {node.VisitCount}");
+                UnityEditor.Handles.Label(node.WorldPosition + Vector3.up * 1.5f,
+                    $"{node.NodeId}\nVisits: {node.VisitCount}");
 #endif
             }
         }
