@@ -8,6 +8,7 @@ using Unity.AI.Navigation;
 using Halazia.AI.Commander;
 using Halazia.Sandbox;
 using Halazia.Shared.Movement;
+using Halazia.Shared.Squad;
 
 namespace Halazia.Editor
 {

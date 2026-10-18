@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using Halazia.AI.Commander;
 using Halazia.Shared.Movement;
+using Halazia.Shared.Squad;
 
 namespace Halazia.Sandbox
 {
