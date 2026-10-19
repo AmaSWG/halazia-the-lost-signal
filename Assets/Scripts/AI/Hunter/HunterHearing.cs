@@ -86,24 +86,21 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
 
     private void OnEnable()
     {
+        motor = GetComponent<IAgentMotor>();
+        combat = GetComponent<ICombatActions>();
+        body = GetComponent<CharacterController>();
+
+        if (motor == null)
+        {
+            Debug.LogError(
+                "Hunter requires an AgentMotor on the same GameObject.",
+                this);
+            return;
+        }
+
         SoundEmitter.SoundEmitted += HearSound;
         motor.OnArrived += HandleArrived;
         motor.OnPathBlocked += HandleBlocked;
-    }
-
-    private void OnDisable()
-    {
-        SoundEmitter.SoundEmitted -= HearSound;
-
-        if (motor != null)
-        {
-            motor.OnArrived -= HandleArrived;
-            motor.OnPathBlocked -= HandleBlocked;
-            motor.Stop();
-        }
-
-        hadVisualContact = false;
-        canSeePlayer = false;
     }
 
     private void Update()
@@ -424,5 +421,12 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         }
 
         return true;
+    }
+
+    [ContextMenu("Test/Defeat Hunter")]
+    private void TestDefeatHunter()
+    {
+        if (Application.isPlaying)
+            TakeDamage(MaxHealth);
     }
 }
