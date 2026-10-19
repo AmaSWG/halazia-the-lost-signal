@@ -31,6 +31,22 @@ namespace Halazia.AI.Commander
         [Tooltip("Distance at which Commander prefers to oversee combat without engaging in close-quarters melee.")]
         [SerializeField] private float _preferredCommandDistance = 12.0f;
 
+        [Header("Perception & Line of Sight")]
+        [Tooltip("Maximum sight range for Commander's direct vision.")]
+        [SerializeField] private float _visionRange = 22.0f;
+
+        [Tooltip("Field of view angle (degrees) for Commander's forward vision cone.")]
+        [SerializeField] private float _visionFovAngle = 120.0f;
+
+        [Tooltip("Physics layer mask for line-of-sight obstruction (walls, barricades, bulkheads).")]
+        [SerializeField] private LayerMask _obstacleMask = ~0;
+
+        [Tooltip("Duration in seconds that combat state persists after last sighting.")]
+        [SerializeField] private float _combatWindowSeconds = 8.0f;
+
+        [Tooltip("If true, Commander strictly requires direct Line of Sight or a squad report to locate the player. If false, Commander tracks player position directly (useful for rapid sandbox testing).")]
+        [SerializeField] private bool _requireLineOfSightOrSquadReport = true;
+
         [Header("Self-Defense & Combat")]
         [Tooltip("Distance at which Commander executes a defensive melee strike (highest priority, ≤ close-quarters range).")]
         [SerializeField] private float _meleeAttackDistance = 2.5f;
@@ -89,6 +105,7 @@ namespace Halazia.AI.Commander
         // Combat perception state
         private bool _isPlayerDetected = false;
         private Vector3 _lastKnownPlayerPosition;
+        private float _timeSincePlayerDetected = 999f;
         private float _tickTimer = 0f;
         private readonly Dictionary<SharedSquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<SharedSquadAgent, Vector3>();
 
@@ -133,6 +150,17 @@ namespace Halazia.AI.Commander
         {
             float deltaTime = Time.deltaTime;
             _tickTimer += deltaTime;
+
+            // Combat window countdown: exit combat mode if no sighting within _combatWindowSeconds (8s)
+            if (_isPlayerDetected)
+            {
+                _timeSincePlayerDetected += deltaTime;
+                if (_timeSincePlayerDetected >= _combatWindowSeconds)
+                {
+                    _isPlayerDetected = false;
+                    Debug.Log($"[CommanderAgent] Combat window expired ({_combatWindowSeconds:F1}s without sighting). Squad transitioning to patrol/search.");
+                }
+            }
 
             // Evaluate mutually exclusive behaviour mode each frame and execute per-frame actions
             EvaluateAndExecuteBehaviourMode();
@@ -380,20 +408,88 @@ namespace Halazia.AI.Commander
             }
         }
 
+        /// <summary>
+        /// Called by squad members (Hunter, Flanker, Sentinel) or perception sensors when the player is detected.
+        /// Preserves architectural decoupling: Commander updates last known coordinates without wallhacking.
+        /// </summary>
+        public void ReportPlayerSighted(Vector3 playerPosition)
+        {
+            _lastKnownPlayerPosition = playerPosition;
+            _timeSincePlayerDetected = 0f;
+            _isPlayerDetected = true;
+
+            // Feed player location into the Markovian corridor heatmap
+            if (_heatmapTracker != null)
+            {
+                _heatmapTracker.NotifyCombatDetection();
+                _heatmapTracker.SamplePlayerLocation(_lastKnownPlayerPosition);
+            }
+        }
+
         private void UpdatePlayerObservation()
         {
-            if (_playerTransform != null)
-            {
-                _lastKnownPlayerPosition = _playerTransform.position;
-                _isPlayerDetected = true;
+            if (_playerTransform == null) return;
 
-                // Feed player location into the Markovian corridor heatmap
-                if (_heatmapTracker != null)
+            // 1. Direct vision check: Does the Commander have unobstructed line-of-sight to the player?
+            if (HasDirectLineOfSightToPlayer())
+            {
+                ReportPlayerSighted(_playerTransform.position);
+                return;
+            }
+
+            // 2. Squad intelligence check: Is any registered squad member currently engaged with the player?
+            foreach (var agent in _registeredSquad)
+            {
+                if (agent != null && agent.IsAlive && agent.IsEngagedWithPlayer)
                 {
-                    _heatmapTracker.NotifyCombatDetection();
-                    _heatmapTracker.SamplePlayerLocation(_lastKnownPlayerPosition);
+                    ReportPlayerSighted(_playerTransform.position);
+                    return;
                 }
             }
+
+            // 3. Fallback if strict line-of-sight is disabled (e.g. testing in sandbox without agents)
+            if (!_requireLineOfSightOrSquadReport)
+            {
+                ReportPlayerSighted(_playerTransform.position);
+            }
+        }
+
+        /// <summary>
+        /// Checks whether the Commander has an unobstructed line of sight to the player
+        /// within vision range and forward field of view cone.
+        /// </summary>
+        public bool HasDirectLineOfSightToPlayer()
+        {
+            if (_playerTransform == null) return false;
+
+            Vector3 eyePos = transform.position + Vector3.up * 1.5f;
+            Vector3 targetPos = _playerTransform.position + Vector3.up * 1.2f;
+            Vector3 toTarget = targetPos - eyePos;
+            float dist = toTarget.magnitude;
+
+            if (dist > _visionRange) return false;
+
+            // Outside close quarters, check forward vision angle
+            if (dist > _closeQuartersDistance)
+            {
+                Vector3 toTargetFlat = new Vector3(toTarget.x, 0f, toTarget.z);
+                if (toTargetFlat.sqrMagnitude > 0.001f)
+                {
+                    float angle = Vector3.Angle(transform.forward, toTargetFlat.normalized);
+                    if (angle > _visionFovAngle * 0.5f) return false;
+                }
+            }
+
+            // Raycast for obstacles (bulkheads, walls, barricades)
+            if (Physics.Raycast(eyePos, toTarget.normalized, out RaycastHit hit, dist, _obstacleMask, QueryTriggerInteraction.Ignore))
+            {
+                if (!hit.transform.CompareTag("Player") && hit.transform != _playerTransform)
+                {
+                    return false; // Vision obstructed
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -578,6 +674,11 @@ namespace Halazia.AI.Commander
         #endregion
 
         #region SharedSquadAgent Interface Methods
+
+        public event Action<ISquadAgent> OnTaskArrived;
+        public event Action<ISquadAgent> OnTaskBlocked;
+        public event Action<ISquadAgent> OnTargetLost;
+        public event Action<ISquadAgent> OnDied;
 
         public void AssignOrder(SquadOrder order)
         {

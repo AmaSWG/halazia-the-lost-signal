@@ -79,7 +79,28 @@ namespace Halazia.AI.Commander
 
         private void Awake()
         {
+            AutoDiscoverSceneMarkers();
             InitializeTransitions();
+        }
+
+        /// <summary>
+        /// Auto-discovers any CorridorNodeMarker components placed in the scene
+        /// and registers them into the Markov tracking graph.
+        /// </summary>
+        public void AutoDiscoverSceneMarkers()
+        {
+            var markers = FindObjectsByType<CorridorNodeMarker>(FindObjectsSortMode.None);
+            if (markers != null)
+            {
+                foreach (var marker in markers)
+                {
+                    if (marker != null)
+                    {
+                        string id = string.IsNullOrWhiteSpace(marker.NodeId) ? marker.gameObject.name : marker.NodeId;
+                        RegisterNode(id, marker.transform.position, marker.Radius);
+                    }
+                }
+            }
         }
 
         private void InitializeTransitions()

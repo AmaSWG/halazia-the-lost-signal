@@ -3,57 +3,6 @@ using UnityEngine;
 
 namespace Halazia.Shared.Squad
 {
-    // ─────────────────────────────────────────────────────────────────────────────
-    // Enumerations
-    // ─────────────────────────────────────────────────────────────────────────────
-
-    public enum AgentRole
-    {
-        Commander,
-        Sentinel,   // Defensive, guards choke points and bulkheads
-        Hunter,     // Aggressive pursuit, tracks and applies direct pressure
-        Flanker     // Stealth / alternative routes, cuts off escape corridors
-    }
-
-    public enum SquadTaskType
-    {
-        Idle,
-        Investigate,    // Scout last known acoustic or visual disturbance
-        Pursue,         // Direct engagement / pressure on player
-        Flank,          // Approach player from lateral route or rear
-        CoverRoute,     // Hold choke point or predicted escape corridor
-        Retreat         // Fall back to regroup with Commander
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────
-    // Tactical Order
-    // ─────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Tactical directive issued by the Commander to a squad member.
-    /// Immutable value type — create a new order instead of mutating an existing one.
-    /// </summary>
-    [Serializable]
-    public struct SquadOrder
-    {
-        public SquadTaskType TaskType;
-        public Vector3 TargetPosition;
-        public string TargetCorridorId;
-        public float Priority;
-        public float IssueTimestamp;
-
-        public SquadOrder(SquadTaskType taskType, Vector3 targetPosition, string corridorId = "", float priority = 1.0f)
-        {
-            TaskType = taskType;
-            TargetPosition = targetPosition;
-            TargetCorridorId = corridorId;
-            Priority = priority;
-            IssueTimestamp = Time.time;
-        }
-
-        public override string ToString() =>
-            $"[{TaskType}] at {TargetPosition} (Corridor: '{TargetCorridorId}', Pri: {Priority:F2})";
-    }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // Squad Agent Contract

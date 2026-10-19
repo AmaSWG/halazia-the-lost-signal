@@ -6,7 +6,6 @@ using AgentRole = Halazia.Shared.Squad.AgentRole;
 using SquadTaskType = Halazia.Shared.Squad.SquadTaskType;
 using SquadOrder = Halazia.Shared.Squad.SquadOrder;
 
-
 namespace Halazia.AI.Commander
 {
     /// <summary>
