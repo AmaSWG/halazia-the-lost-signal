@@ -57,6 +57,12 @@ namespace Halazia.Shared.Squad
         /// Primary role: Sentinel.
         /// Priority: 0.65 – 0.77 (scales with Markov prediction confidence)
         /// </summary>
-        CoverRoute
+        CoverRoute,
+
+        /// <summary>
+        /// Fall back toward the Commander or safe zone when overwhelmed or out of combat range.
+        /// Priority: 0.90
+        /// </summary>
+        Retreat
     }
 }

@@ -14,6 +14,9 @@ namespace Halazia.Shared.Squad
         Flanker,
 
         /// <summary>Area security agent. Specializes in patrol, choke-point blockades, and escape-route denial.</summary>
-        Sentinel
+        Sentinel,
+
+        /// <summary>Tactical coordinator. Directs the squad, maintains standoff command distance, and retreats when threatened.</summary>
+        Commander
     }
 }
