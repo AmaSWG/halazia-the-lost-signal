@@ -429,4 +429,20 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         if (Application.isPlaying)
             TakeDamage(MaxHealth);
     }
+
+    //stop hearing sounds
+    private void OnDisable()
+    {
+        SoundEmitter.SoundEmitted -= HearSound;
+
+        if (motor != null)
+        {
+            motor.OnArrived -= HandleArrived;
+            motor.OnPathBlocked -= HandleBlocked;
+            motor.Stop();
+        }
+
+        hadVisualContact = false;
+        canSeePlayer = false;
+    }
 }
