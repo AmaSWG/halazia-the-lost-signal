@@ -13,6 +13,7 @@ namespace Halazia.Shared.Movement
     [DisallowMultipleComponent]
     public class AgentAnimatorDriver : MonoBehaviour
     {
+        [SerializeField] private Animator animatorTarget;
         [Header("Motor Binding")]
         [Tooltip("Reference to the motor component. If null, will search on this GameObject or parent.")]
         [SerializeField] private MonoBehaviour _motorSource;
@@ -91,7 +92,9 @@ namespace Halazia.Shared.Movement
 
         private void Awake()
         {
-            _animator = GetComponent<Animator>();
+            _animator = animatorTarget != null
+                ? animatorTarget
+                : GetComponent<Animator>();
 
             // Resolve IAgentMotor interface reference
             if (_motorSource is IAgentMotor motorInterface)
