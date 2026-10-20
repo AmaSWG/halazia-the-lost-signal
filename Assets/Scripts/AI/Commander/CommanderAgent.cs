@@ -675,11 +675,6 @@ namespace Halazia.AI.Commander
 
         #region SharedSquadAgent Interface Methods
 
-        public event Action<ISquadAgent> OnTaskArrived;
-        public event Action<ISquadAgent> OnTaskBlocked;
-        public event Action<ISquadAgent> OnTargetLost;
-        public event Action<ISquadAgent> OnDied;
-
         public void AssignOrder(SquadOrder order)
         {
             _currentSelfTask = order.TaskType;

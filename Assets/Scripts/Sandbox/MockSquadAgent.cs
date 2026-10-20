@@ -14,7 +14,7 @@ namespace Halazia.Sandbox
     /// Uses IAgentMotor for movement.
     /// </summary>
     [RequireComponent(typeof(AgentMotor))]
-    public class MockSquadAgent : MonoBehaviour, Halazia.AI.Commander.ISquadAgent
+    public class MockSquadAgent : MonoBehaviour, Halazia.Shared.Squad.ISquadAgent
     {
         [Header("Agent Identity")]
         [SerializeField] private string _agentId = "Agent_01";
