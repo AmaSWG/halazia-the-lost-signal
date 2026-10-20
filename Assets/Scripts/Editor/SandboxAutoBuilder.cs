@@ -170,7 +170,380 @@ namespace Halazia.Editor
             );
         }
 
-        [MenuItem("Halazia/⚡ Fix Pink Shaders & Reset Camera", false, 2)]
+        // ─────────────────────────────────────────────────────────────────────────
+        // Remove Old Soldier Models
+        // Deletes Enemy_Base and Enemy_commander prefab instances from the active
+        // scene. Touches NOTHING else — perfectly safe to run at any time.
+        // ─────────────────────────────────────────────────────────────────────────
+        [MenuItem("Halazia/🗑️ Remove Old Soldier Models from Scene", false, 2)]
+        public static void RemoveOldSoldierModels()
+        {
+            // Names that correspond to the two old soldier prefab instances
+            string[] targetNames = { "Enemy_Base", "Enemy_commander" };
+
+            var allObjects = Object.FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var removed = new System.Collections.Generic.List<string>();
+
+            foreach (var go in allObjects)
+            {
+                foreach (var targetName in targetNames)
+                {
+                    // Match by exact name OR prefab-style name (e.g. "Enemy_Base (1)")
+                    if (go != null && go.name.StartsWith(targetName, System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        removed.Add(go.name);
+                        Undo.DestroyObjectImmediate(go);
+                        break;
+                    }
+                }
+            }
+
+            if (removed.Count == 0)
+            {
+                EditorUtility.DisplayDialog(
+                    "Remove Old Soldier Models",
+                    "No soldier models found in the active scene.\n\n" +
+                    "Make sure the MovementSandbox scene is open and the objects are named:\n" +
+                    "• Enemy_Base\n• Enemy_commander",
+                    "OK"
+                );
+                return;
+            }
+
+            // Save the scene so the removal is persisted on disk
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.SaveOpenScenes();
+
+            string removedList = string.Join("\n• ", removed);
+            Debug.Log($"[Halazia] Removed {removed.Count} old soldier model(s): {removedList}");
+            EditorUtility.DisplayDialog(
+                "Remove Old Soldier Models",
+                $"Successfully removed {removed.Count} object(s):\n• {removedList}\n\nThe scene has been saved.",
+                "Done"
+            );
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // Attach Commander 3D Model to Agent_Commander
+        // Hides the placeholder capsule renderer, instantiates Commander.fbx as
+        // a child of Agent_Commander, and wires the Animator Controller.
+        // Touches ONLY Agent_Commander — no other scene objects or scripts changed.
+        // ─────────────────────────────────────────────────────────────────────────
+        private const string CommanderModelPath = "Assets/Art/Models/Agents/Commander.fbx";
+
+        [MenuItem("Halazia/🧍 Attach Commander Model to Agent_Commander", false, 3)]
+        public static void AttachCommanderModel()
+        {
+            // 1. Find Agent_Commander in the active scene (robust lookup)
+            var cmdObj = GameObject.Find("Agent_Commander");
+            if (cmdObj == null)
+            {
+                var all = Object.FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                foreach (var go in all)
+                {
+                    if (go.name.StartsWith("Agent_Command", System.StringComparison.OrdinalIgnoreCase))
+                    {
+                        cmdObj = go;
+                        break;
+                    }
+                }
+            }
+
+            if (cmdObj == null)
+            {
+                EditorUtility.DisplayDialog(
+                    "Attach Commander Model",
+                    "Could not find 'Agent_Commander' in the active scene.\n\n" +
+                    "Make sure MovementSandbox is open and the object exists.",
+                    "OK"
+                );
+                return;
+            }
+
+            // Normalize name
+            cmdObj.name = "Agent_Commander";
+
+            // 2. Hide the placeholder capsule MeshRenderer (keep collider + scripts)
+            var meshRenderer = cmdObj.GetComponent<MeshRenderer>();
+            if (meshRenderer != null)
+            {
+                meshRenderer.enabled = false;
+                EditorUtility.SetDirty(cmdObj);
+            }
+
+            // 3. Remove any previously attached model child (re-run safe)
+            var existing = cmdObj.transform.Find("CommanderModel");
+            if (existing != null)
+            {
+                Undo.DestroyObjectImmediate(existing.gameObject);
+            }
+
+            // 4. Load Commander.fbx prefab
+            var commanderPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CommanderModelPath);
+            if (commanderPrefab == null)
+            {
+                EditorUtility.DisplayDialog(
+                    "Attach Commander Model",
+                    "Commander model not found at:\n" + CommanderModelPath,
+                    "OK"
+                );
+                return;
+            }
+
+            // 5. Instantiate the model as a child of Agent_Commander
+            var modelInstance = (GameObject)PrefabUtility.InstantiatePrefab(commanderPrefab, cmdObj.transform);
+            modelInstance.name = "CommanderModel";
+            modelInstance.transform.localPosition = new Vector3(0f, -1f, 0f); // offset so feet sit on ground
+            modelInstance.transform.localRotation = Quaternion.identity;
+            modelInstance.transform.localScale    = Vector3.one;
+
+            // 6. Configure Animator on the child CommanderModel:
+            // In Unity, a Humanoid Avatar must sit directly on the model GameObject that roots the bone hierarchy.
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath);
+
+            var modelAnimator = modelInstance.GetComponent<Animator>();
+            if (modelAnimator == null)
+                modelAnimator = modelInstance.AddComponent<Animator>();
+
+            modelAnimator.enabled = true;
+            if (controller != null)
+                modelAnimator.runtimeAnimatorController = controller;
+
+            // Ensure humanoid avatar is assigned
+            if (modelAnimator.avatar == null)
+            {
+                var subAssets = AssetDatabase.LoadAllAssetsAtPath(CommanderModelPath);
+                foreach (var sub in subAssets)
+                {
+                    if (sub is Avatar av && av.isValid)
+                    {
+                        modelAnimator.avatar = av;
+                        break;
+                    }
+                }
+            }
+            EditorUtility.SetDirty(modelAnimator);
+
+            // 7. Configure components on parent Agent_Commander:
+            // - Ensure AgentAnimatorDriver exists on parent (locates child Animator automatically)
+            var driver = cmdObj.GetComponent<AgentAnimatorDriver>();
+            if (driver == null)
+                driver = cmdObj.AddComponent<AgentAnimatorDriver>();
+            EditorUtility.SetDirty(driver);
+
+            // - Ensure CombatActionsAdapter exists on parent so CommanderAgent has ICombatActions
+            var combatAdapter = cmdObj.GetComponent<Halazia.Shared.Combat.CombatActionsAdapter>();
+            if (combatAdapter == null)
+                combatAdapter = cmdObj.AddComponent<Halazia.Shared.Combat.CombatActionsAdapter>();
+            EditorUtility.SetDirty(combatAdapter);
+
+            // - Remove redundant/empty Animator on the parent capsule to prevent retargeting conflicts
+            var parentAnimator = cmdObj.GetComponent<Animator>();
+            if (parentAnimator != null)
+            {
+                Undo.DestroyObjectImmediate(parentAnimator);
+            }
+
+            // 8. Fix squad agent roles and name tags to match their colors
+            FixSquadAgentRoles();
+
+            // 9. Register undo & save
+            Undo.RegisterCreatedObjectUndo(modelInstance, "Attach Commander Model");
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.SaveOpenScenes();
+
+            // Ping and select Agent_Commander in the Hierarchy so it's clearly visible
+            Selection.activeGameObject = cmdObj;
+            EditorGUIUtility.PingObject(cmdObj);
+
+            Debug.Log("[Halazia] Commander model attached to Agent_Commander successfully.");
+            EditorUtility.DisplayDialog(
+                "Attach Commander Model",
+                "Commander model attached to Agent_Commander!\n\n" +
+                "• Placeholder capsule renderer hidden\n" +
+                "• Commander.fbx spawned as child 'CommanderModel' (Animator + Avatar enabled)\n" +
+                "• Parent AgentAnimatorDriver & CombatActionsAdapter wired\n" +
+                "• Name tags corrected (Red: Hunter, Yellow: Flanker, Blue: Sentinel, 3D: Commander)\n\n" +
+                "Agent_Commander is selected. Press Play to test locomotion animations!",
+                "Done"
+            );
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // Fix Squad Agent Roles and Name Tags
+        // Ensures Inspector roles match the GameObject identity and debug colors:
+        // • Red capsule    = Hunter
+        // • Yellow capsule = Flanker
+        // • Blue capsule   = Sentinel
+        // ─────────────────────────────────────────────────────────────────────────
+        [MenuItem("Halazia/🏷️ Fix Agent Roles & Name Tags in Scene", false, 4)]
+        public static void FixAgentRolesAndNameTags()
+        {
+            FixSquadAgentRoles();
+            EditorUtility.DisplayDialog(
+                "Fix Agent Roles & Name Tags",
+                "Squad roles and name tags have been corrected!\n\n" +
+                "• Agent_Hunter   → Red Capsule (Hunter_01)\n" +
+                "• Agent_Flanker  → Yellow Capsule (Flanker_01)\n" +
+                "• Agent_Sentinel → Blue Capsule (Sentinel_01)\n" +
+                "• Agent_Commander → 3D Model (Commander)\n\n" +
+                "The scene has been saved.",
+                "Done"
+            );
+        }
+
+        private static void FixSquadAgentRoles()
+        {
+            var hunter = GameObject.Find("Agent_Hunter");
+            if (hunter != null)
+            {
+                var mock = hunter.GetComponent<MockSquadAgent>();
+                if (mock != null)
+                {
+                    var so = new SerializedObject(mock);
+                    so.FindProperty("_role").enumValueIndex = (int)AgentRole.Hunter;
+                    so.FindProperty("_agentId").stringValue = "Hunter_01";
+                    so.ApplyModifiedProperties();
+                    EditorUtility.SetDirty(mock);
+                }
+            }
+
+            var flanker = GameObject.Find("Agent_Flanker");
+            if (flanker != null)
+            {
+                var mock = flanker.GetComponent<MockSquadAgent>();
+                if (mock != null)
+                {
+                    var so = new SerializedObject(mock);
+                    so.FindProperty("_role").enumValueIndex = (int)AgentRole.Flanker;
+                    so.FindProperty("_agentId").stringValue = "Flanker_01";
+                    so.ApplyModifiedProperties();
+                    EditorUtility.SetDirty(mock);
+                }
+            }
+
+            var sentinel = GameObject.Find("Agent_Sentinel");
+            if (sentinel != null)
+            {
+                var mock = sentinel.GetComponent<MockSquadAgent>();
+                if (mock != null)
+                {
+                    var so = new SerializedObject(mock);
+                    so.FindProperty("_role").enumValueIndex = (int)AgentRole.Sentinel;
+                    so.FindProperty("_agentId").stringValue = "Sentinel_01";
+                    so.ApplyModifiedProperties();
+                    EditorUtility.SetDirty(mock);
+                }
+            }
+
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.SaveOpenScenes();
+            Debug.Log("[Halazia] Squad agent roles & name tags corrected in active scene.");
+        }
+
+
+        // Loads FBX clips from Assets/Animations/Agents/Clips/ and assigns them
+        // to the correct states in Agent_AnimatorController.controller.
+        // Touches ONLY the Animator Controller asset — nothing else.
+        // ─────────────────────────────────────────────────────────────────────────
+        [MenuItem("Halazia/🎬 Wire Animation Clips into Animator", false, 3)]
+        public static void WireAnimationClips()
+        {
+            // Load the Animator Controller
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath);
+            if (controller == null)
+            {
+                EditorUtility.DisplayDialog(
+                    "Wire Animation Clips",
+                    "Animator Controller not found at:\n" + ControllerPath +
+                    "\n\nRun '⚡ 1-Click Build Sandbox Scene & Animator' first.",
+                    "OK"
+                );
+                return;
+            }
+
+            // ── Helper: load the first non-preview AnimationClip from an FBX ──
+            System.Func<string, AnimationClip> LoadClip = (fileName) =>
+            {
+                string path = $"Assets/Animations/Agents/Clips/{fileName}";
+                var assets = AssetDatabase.LoadAllAssetsAtPath(path);
+                foreach (var a in assets)
+                    if (a is AnimationClip c && !c.name.StartsWith("__preview__"))
+                        return c;
+                Debug.LogWarning($"[Halazia] Clip not found: {path}");
+                return null;
+            };
+
+            // ── Load the clips we need ──
+            AnimationClip clipIdle   = LoadClip("Rifle Idle.fbx");
+            AnimationClip clipWalk   = LoadClip("Walk Forward.fbx") ?? LoadClip("Pistol Walk.fbx");
+            AnimationClip clipRun    = LoadClip("Run Forward.fbx");
+            AnimationClip clipAttack = LoadClip("Standing Melee Attack Horizontal.fbx") ?? LoadClip("Standing Melee Attack 360 High.fbx");
+            AnimationClip clipHit    = LoadClip("Hit Reaction.fbx");
+            AnimationClip clipDeath  = LoadClip("Dying.fbx");
+
+            var rootSM = controller.layers[0].stateMachine;
+            int wired  = 0;
+
+            foreach (var stateRef in rootSM.states)
+            {
+                var state = stateRef.state;
+
+                // ── Locomotion Blend Tree ──────────────────────────────────────
+                if (state.name == "Locomotion" && state.motion is BlendTree bt)
+                {
+                    var children = bt.children;
+
+                    if (children.Length >= 1 && clipIdle  != null) { children[0].motion = clipIdle;  wired++; }
+                    if (children.Length >= 2 && clipWalk  != null) { children[1].motion = clipWalk;  wired++; }
+                    if (children.Length >= 3 && clipRun   != null) { children[2].motion = clipRun;   wired++; }
+
+                    bt.children = children;
+                    EditorUtility.SetDirty(bt);
+                }
+
+                // ── Attack_Melee ───────────────────────────────────────────────
+                if (state.name == "Attack_Melee" && clipAttack != null)
+                {
+                    state.motion = clipAttack;
+                    wired++;
+                }
+
+                // ── Hit_Reaction ───────────────────────────────────────────────
+                if (state.name == "Hit_Reaction" && clipHit != null)
+                {
+                    state.motion = clipHit;
+                    wired++;
+                }
+
+                // ── Death ──────────────────────────────────────────────────────
+                if (state.name == "Death" && clipDeath != null)
+                {
+                    state.motion = clipDeath;
+                    wired++;
+                }
+
+                EditorUtility.SetDirty(state);
+            }
+
+            EditorUtility.SetDirty(controller);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            Debug.Log($"[Halazia] Wired {wired} animation clip(s) into '{ControllerPath}'.");
+            EditorUtility.DisplayDialog(
+                "Wire Animation Clips",
+                $"Successfully wired {wired} clip(s) into the Animator Controller:\n\n" +
+                $"• Locomotion Blend Tree → Idle / Walk / Run\n" +
+                $"• Attack_Melee  → Standing Melee Attack (1)\n" +
+                $"• Hit_Reaction  → Hit Reaction\n" +
+                $"• Death         → Dying\n\n" +
+                $"Open the Animator window to verify.",
+                "Done"
+            );
+        }
+
+        [MenuItem("Halazia/⚡ Fix Pink Shaders & Reset Camera", false, 4)]
         public static void FixMaterialsAndCamera()
         {
             EnsureDirectory(MaterialsDirectory);

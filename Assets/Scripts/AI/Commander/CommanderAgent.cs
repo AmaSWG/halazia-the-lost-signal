@@ -47,10 +47,10 @@ namespace Halazia.AI.Commander
 
         [Header("Self-Defense & Combat")]
         [Tooltip("Distance at which Commander executes a defensive melee strike (highest priority, ≤ close-quarters range).")]
-        [SerializeField] private float _meleeAttackDistance = 2.5f;
+        [SerializeField] private float _meleeAttackDistance = 3.2f;
 
         [Tooltip("Distance below which Commander halts movement and enters close-quarters defense. Melee fires when cooldown allows.")]
-        [SerializeField] private float _closeQuartersDistance = 2.8f;
+        [SerializeField] private float _closeQuartersDistance = 3.5f;
 
         [Tooltip("Distance below which Commander begins active tactical retreat away from the player.")]
         [SerializeField] private float _retreatTriggerDistance = 8.0f;
@@ -254,8 +254,21 @@ namespace Halazia.AI.Commander
         {
             Debug.Log($"[CommanderAgent] ⚔️ Player in close quarters ({Vector3.Distance(transform.position, _playerTransform.position):F1}m)! Commander executes tactical defense strike!");
 
-            // Fix 1: Uses ICombatActions — no reference to AgentAnimatorDriver
-            _combatActions?.Attack();
+            if (_combatActions == null)
+            {
+                _combatActions = GetComponent<ICombatActions>() ?? GetComponentInChildren<ICombatActions>();
+            }
+
+            if (_combatActions != null)
+            {
+                _combatActions.Attack();
+            }
+            else
+            {
+                // Fallback: drive attack directly through AgentAnimatorDriver
+                var driver = GetComponent<AgentAnimatorDriver>() ?? GetComponentInChildren<AgentAnimatorDriver>();
+                driver?.PlayAttack();
+            }
         }
 
         #region Squad Registry Management
@@ -730,6 +743,12 @@ namespace Halazia.AI.Commander
                     Gizmos.DrawLine(transform.position + Vector3.up * 1.5f, agent.Position + Vector3.up * 1.5f);
                 }
             }
+
+#if UNITY_EDITOR
+            Gizmos.color = new Color(0.65f, 0.25f, 0.9f);
+            Gizmos.DrawWireSphere(transform.position + Vector3.up * 2f, 0.25f);
+            UnityEditor.Handles.Label(transform.position + Vector3.up * 2.3f, $"Commander\n[{_behaviourMode}]");
+#endif
         }
 
         #endregion
