@@ -15,6 +15,8 @@ namespace Halazia.AI.Sentinel
     public class SentinelAgent : MonoBehaviour, ISquadAgent, ISentinelDamageable
     {
         public enum SentinelState { Idle, Patrol, MoveToOrder, Guard, Investigate, Search, Chase, Attack, ReturnToPost, Dead }
+        // High-level gameplay states retain the existing detailed navigation/combat states.
+        public enum BehaviorState { Idle, Patrol, Guard, Alert, Combat, Return, Dead, Disabled }
 
         [Header("Agent Identity")]
         [SerializeField] private string _agentId = "Sentinel_01";
@@ -49,7 +51,7 @@ namespace Halazia.AI.Sentinel
         [SerializeField, Min(0f)] private float _damage = 15f;
         [SerializeField, Range(1f, 180f)] private float _attackFacingAngle = 30f;
         [Header("Navigation")]
-        [Tooltip("Required: Weighted A* adapter, or explicitly opt into SentinelNavMeshPrototype.")]
+        [Tooltip("Required path planner. Use SentinelNavMeshPrototype with a baked NavMesh.")]
         [SerializeField] private SentinelPathProvider _pathProvider;
         [Tooltip("Match AgentMotor Max Speed: its API exposes a multiplier, not absolute speed.")]
         [SerializeField, Min(0.01f)] private float _motorBaseSpeed = 4.2f;
@@ -59,6 +61,9 @@ namespace Halazia.AI.Sentinel
         [SerializeField, Min(0.1f)] private float _repathInterval = 0.6f;
         [SerializeField, Min(0.1f)] private float _targetMoveThreshold = 0.8f;
         [SerializeField, Min(0.5f)] private float _stuckTimeout = 3f;
+        [Tooltip("Characters are excluded from the NavMesh bake. Head-on contacts with bodies up to this horizontal " +
+                 "half-size (player, corpse, crate) are bypassed; larger contacts are reported as blocked.")]
+        [SerializeField, Min(0f)] private float _maxBypassObstacleRadius = 1.5f;
         [Header("Debug")]
         [SerializeField] private bool _debugLogs = false;
         [SerializeField] private bool _drawGizmos = true;
@@ -69,16 +74,22 @@ namespace Halazia.AI.Sentinel
         private CommanderAgent _commander;
         private IAgentMotor _motor;
         private ICombatActions _combat;
+        private AgentAnimatorDriver _animation;
         private ISentinelDamageable _targetHealth;
         private UnityEngine.Object _targetHealthObject;
         private Transform _cachedTarget;
         private Vector3 _homePost, _post, _lastKnownPlayerPosition, _destination, _progressPosition;
         private bool _tracking, _visible, _moving, _motorBlocked, _motorArrived, _patrolComplete;
         private int _patrolIndex, _orderVersion;
+        private int _patrolVisits;
+        private string _lastPatrolWaypoint = "None";
         private float _nextPerception, _lastSeen, _nextAttack, _nextPath, _progressTime, _waitUntil, _retryAfter;
         private float _nextCommanderLookup;
         private float _nextHealthLookup;
         private bool _warnedMissingHealth;
+        private Collider _contact;
+        private float _contactTime, _bodyRadius = 0.5f;
+        private int _bypassAttempts;
         private readonly List<MonoBehaviour> _targetComponents = new List<MonoBehaviour>();
         private readonly RaycastHit[] _sightHits = new RaycastHit[64];
         private SentinelState _state;
@@ -94,6 +105,16 @@ namespace Halazia.AI.Sentinel
         public SquadOrder CurrentOrder => _currentOrder;
         public bool HasOrder => _hasOrder;
         public SentinelState State => _state;
+        public int PatrolVisits => _patrolVisits;
+        public string LastPatrolWaypoint => _lastPatrolWaypoint;
+        public int NextPatrolWaypointNumber => _patrolWaypoints != null &&
+            _patrolIndex < _patrolWaypoints.Length && !_patrolComplete ? _patrolIndex + 1 : 0;
+        public BehaviorState Behavior => !IsAlive ? BehaviorState.Dead : !isActiveAndEnabled ? BehaviorState.Disabled :
+            _state == SentinelState.Patrol ? BehaviorState.Patrol :
+            _state == SentinelState.Guard ? BehaviorState.Guard :
+            _state == SentinelState.Investigate || _state == SentinelState.Search || _state == SentinelState.MoveToOrder ? BehaviorState.Alert :
+            _state == SentinelState.Chase || _state == SentinelState.Attack ? BehaviorState.Combat :
+            _state == SentinelState.ReturnToPost ? BehaviorState.Return : BehaviorState.Idle;
         public Vector3 LastKnownPlayerPosition => _lastKnownPlayerPosition;
         public event Action<ISquadAgent> OnTaskArrived;
         public event Action<ISquadAgent> OnTaskBlocked;
@@ -105,7 +126,10 @@ namespace Halazia.AI.Sentinel
             OnValidate();
             _currentHealth = _maxHealth;
             _motor = GetComponent<IAgentMotor>();
-            _combat = GetComponent<ICombatActions>();
+            _combat = GetComponent<ICombatActions>() ?? GetComponentInChildren<ICombatActions>();
+            _animation = GetComponentInChildren<AgentAnimatorDriver>();
+            var body = GetComponent<CharacterController>();
+            if (body != null) _bodyRadius = body.radius * Mathf.Max(Mathf.Abs(transform.lossyScale.x), Mathf.Abs(transform.lossyScale.z));
             _homePost = _guardPosition != null ? _guardPosition.position : Position;
             _post = _homePost;
             if (_pathProvider == null) _pathProvider = GetComponent<SentinelPathProvider>();
@@ -122,7 +146,7 @@ namespace Halazia.AI.Sentinel
                 enabled = false;
             }
             if (_pathProvider == null)
-                Debug.LogError($"[SentinelAgent:{_agentId}] Missing path provider. Weighted A* is absent; explicitly add SentinelNavMeshPrototype for prototype navigation.", this);
+                Debug.LogError($"[SentinelAgent:{_agentId}] Missing path provider. Add SentinelNavMeshPrototype and bake the scene NavMesh.", this);
         }
 
         private void OnEnable()
@@ -134,7 +158,7 @@ namespace Halazia.AI.Sentinel
             _commander = FindAnyObjectByType<CommanderAgent>();
             if (_commander != null) _commander.RegisterSquadMember(this);
             else Debug.LogWarning($"[SentinelAgent:{_agentId}] No CommanderAgent found in scene.", this);
-            if (_hasOrder && _blockedReported) SetState(SentinelState.Idle);
+            if (_hasOrder && (_blockedReported || CurrentTask == SquadTaskType.Idle)) SetState(SentinelState.Idle);
             else if (_hasOrder && !_arrivedReported) BeginOrder();
             else SetState(SentinelState.ReturnToPost);
         }
@@ -146,6 +170,7 @@ namespace Halazia.AI.Sentinel
                 _motor.OnArrived -= MotorArrived;
                 _motor.OnPathBlocked -= MotorBlocked;
                 StopNavigation();
+                SetMovementLocked(true);
             }
             if (_commander != null) _commander.UnregisterSquadMember(this);
             _commander = null;
@@ -170,6 +195,7 @@ namespace Halazia.AI.Sentinel
             if (_tracking && ((!_visible && Time.time - _lastSeen >= _targetLostTimeout) || !TargetValid()))
             {
                 _tracking = false;
+                if (_debugLogs) Debug.Log($"[SentinelAgent:{_agentId}] Contact lost after acquisition; last seen at {_lastKnownPlayerPosition}.", this);
                 int version = _orderVersion;
                 if (_state == SentinelState.Chase || _state == SentinelState.Attack) SetState(SentinelState.Investigate);
                 // Commander can synchronously assign a new order during this callback.
@@ -224,7 +250,27 @@ namespace Halazia.AI.Sentinel
             _hasOrder = true;
             _arrivedReported = _blockedReported = false;
             _retryAfter = 0f;
-            BeginOrder();
+            // A new Patrol assignment starts a new route. Re-enabling or resuming
+            // after combat retains progress because it does not assign a new order.
+            if (order.TaskType == SquadTaskType.Patrol)
+            {
+                _patrolIndex = _patrolVisits = 0;
+                _lastPatrolWaypoint = "None";
+                _patrolComplete = false;
+            }
+            if (isActiveAndEnabled) BeginOrder();
+        }
+
+        public bool StartPatrolRoute()
+        {
+            if (!IsAlive || _patrolWaypoints == null) return false;
+            foreach (var waypoint in _patrolWaypoints)
+            {
+                if (waypoint == null) continue;
+                AssignOrder(SquadOrder.Patrol(waypoint.position));
+                return true;
+            }
+            return false;
         }
 
         private void BeginOrder()
@@ -268,7 +314,11 @@ namespace Halazia.AI.Sentinel
             if (!IsAlive || damage <= 0f || float.IsNaN(damage) || float.IsInfinity(damage)) return;
             _currentHealth = Mathf.Clamp(_currentHealth - damage, 0f, _maxHealth);
             if (IsAlive) { _combat?.Hit(); return; }
+            _orderVersion++;
+            _hasOrder = false;
+            _currentOrder = default;
             SetState(SentinelState.Dead);
+            _animation?.TriggerDie();
             _tracking = _visible = false;
             OnDied?.Invoke(this);
             if (_commander != null) _commander.UnregisterSquadMember(this);
@@ -301,6 +351,10 @@ namespace Halazia.AI.Sentinel
                 return;
             }
             if (!MoveTo(point, _patrolSpeed)) return;
+            _patrolVisits++;
+            _lastPatrolWaypoint = _patrolWaypoints[_patrolIndex].name;
+            if (_debugLogs)
+                Debug.Log($"[SentinelAgent:{_agentId}] Patrol waypoint {_patrolIndex + 1}/{_patrolWaypoints.Length}: {_lastPatrolWaypoint}; visit {_patrolVisits}.", this);
             _patrolIndex++;
             if (_patrolIndex >= _patrolWaypoints.Length)
             {
@@ -359,9 +413,12 @@ namespace Halazia.AI.Sentinel
             }
             _visible = TargetValid() && CanSeePlayer(true);
             if (!_visible) return;
+            if (!_tracking && _debugLogs)
+                Debug.Log($"[SentinelAgent:{_agentId}] Target acquired at {_playerTarget.position}.", this);
             _tracking = true;
             _lastSeen = Time.time;
             _lastKnownPlayerPosition = _playerTarget.position;
+            if (_commander != null) _commander.ReportPlayerSighted(_lastKnownPlayerPosition);
         }
 
         private bool TargetValid() => _playerTarget != null && _playerTarget != transform &&
@@ -397,7 +454,7 @@ namespace Halazia.AI.Sentinel
             _motor.SetFaceTarget(_playerTarget);
             Vector3 direction = _playerTarget.position - Position;
             direction.y = 0f;
-            if (Time.time < _nextAttack || Vector3.Angle(transform.forward, direction) > _attackFacingAngle) return;
+            if ((_animation != null && _animation.IsAttacking) || Time.time < _nextAttack || Vector3.Angle(transform.forward, direction) > _attackFacingAngle) return;
             if (Vector3.Distance(Position, _playerTarget.position) > _attackRange) return;
             _nextAttack = Time.time + _attackCooldown;
             int version = _orderVersion;
@@ -410,14 +467,24 @@ namespace Halazia.AI.Sentinel
         // Verify arrival against the requested destination, never only the motor's event.
         private bool MoveTo(Vector3 destination, float speed)
         {
+            // Recovery must not accumulate navigation stuck time.
+            if (_animation != null && _animation.IsAttacking)
+            { _progressTime = Time.time; return false; }
             if (!Finite(destination)) { BlockNavigation(); return false; }
             if (Vector3.Distance(Position, destination) <= _arrivalDistance)
             { StopNavigation(); return true; }
-            if (_motorBlocked) { BlockNavigation(); return false; }
+            bool reached;
+            if (_motorBlocked)
+            {
+                if (TryBypassContact(destination, speed, out reached)) return reached;
+                BlockNavigation(); return false;
+            }
             if (_moving)
             {
                 if (Vector3.Distance(Position, _progressPosition) >= 0.1f)
                 { _progressPosition = Position; _progressTime = Time.time; }
+                // Pass an unbaked body before the motor's stuck timer reports blockage.
+                if (TryBypassContact(destination, speed, out reached)) return reached;
                 if (_motorArrived)
                 {
                     // Reaching an old pursuit endpoint is progress, not a blocked path.
@@ -434,24 +501,90 @@ namespace Halazia.AI.Sentinel
                 }
             }
             _motor.Stop();
-            if (_pathProvider == null || !_pathProvider.isActiveAndEnabled ||
-                !_pathProvider.TryGetPath(Position, destination, out var path) || path == null || path.Length == 0 ||
-                Vector3.Distance(path[path.Length - 1], destination) > _arrivalDistance)
-            { BlockNavigation(); return false; }
+            if (!TryPath(Position, destination, out var path) ||
+                Vector3.Distance(path[path.Length - 1], destination) > _arrivalDistance ||
+                !SendPath(path, destination, speed))
+                BlockNavigation();
+            return false;
+        }
+
+        private bool TryPath(Vector3 from, Vector3 to, out Vector3[] path)
+        {
+            path = null;
+            return _pathProvider != null && _pathProvider.isActiveAndEnabled &&
+                _pathProvider.TryGetPath(from, to, out path) && path != null && path.Length > 0;
+        }
+
+        private bool SendPath(Vector3[] path, Vector3 destination, float speed)
+        {
             for (int i = 0; i < path.Length; i++)
-            {
                 if (!Finite(path[i]) || ((_state == SentinelState.Chase || _state == SentinelState.Investigate) && !WithinDefense(path[i])))
-                { BlockNavigation(); return false; }
-            }
+                    return false;
             _destination = destination;
             _nextPath = Time.time + _repathInterval;
             if (!_moving) { _progressTime = Time.time; _progressPosition = Position; }
             _moving = true;
-            _motorArrived = false;
-            _motor.SetMovementLocked(false);
+            _motorArrived = _motorBlocked = false;
+            SetMovementLocked(false);
             _motor.SetSpeedModifier(speed / _motorBaseSpeed);
             _motor.SetPath(path);
+            return true;
+        }
+
+        // Characters are excluded from the NavMesh bake, so a planned path can run into a body.
+        private void OnControllerColliderHit(ControllerColliderHit hit)
+        {
+            if (!_moving || hit.collider == null || hit.collider.isTrigger || hit.transform.IsChildOf(transform)) return;
+            Vector3 normal = Flat(hit.normal), push = Flat(hit.moveDirection);
+            if (normal.sqrMagnitude < 0.25f || push.sqrMagnitude < 0.0001f) return; // floors and slopes
+            if (Vector3.Dot(normal.normalized, push.normalized) > -0.7f) return;    // glancing contacts slide
+            _contact = hit.collider;
+            _contactTime = Time.time;
+        }
+
+        /// <summary>Detours around a small, recently touched body using NavMesh-validated side points.
+        /// If the body occupies the destination, stopping against it counts as arrival.</summary>
+        private bool TryBypassContact(Vector3 destination, float speed, out bool reached)
+        {
+            reached = false;
+            var contact = _contact;
+            _contact = null;
+            if (contact == null || !contact.enabled || !contact.gameObject.activeInHierarchy || Time.time - _contactTime > 0.25f) return false;
+            Bounds bounds = contact.bounds;
+            float halfSize = Mathf.Max(bounds.extents.x, bounds.extents.z);
+            if (halfSize > _maxBypassObstacleRadius) return false;
+            float clearance = halfSize + _bodyRadius + 0.25f;
+            Vector3 center = new Vector3(bounds.center.x, Position.y, bounds.center.z);
+            if (Flat(destination - center).magnitude <= clearance) { StopNavigation(); reached = true; return true; }
+            Vector3 forward = Flat(destination - Position);
+            if (_bypassAttempts >= 2 || forward.sqrMagnitude < 0.0001f) return false;
+            _bypassAttempts++;
+            forward.Normalize();
+            Vector3 side = new Vector3(-forward.z, 0f, forward.x);
+            if (Vector3.Dot(Position - center, side) < 0f) side = -side; // prefer the side already favoured
+            for (int attempt = 0; attempt < 2; attempt++, side = -side)
+            {
+                Vector3 a = center + (side - forward) * clearance, b = center + (side + forward) * clearance;
+                if (!TryPath(Position, a, out var toA) || !TryPath(a, b, out var toB) || !TryPath(b, destination, out var toEnd) ||
+                    Vector3.Distance(toEnd[toEnd.Length - 1], destination) > _arrivalDistance) continue;
+                var path = new List<Vector3>(toA);
+                for (int i = 1; i < toB.Length; i++) path.Add(toB[i]);
+                for (int i = 1; i < toEnd.Length; i++) path.Add(toEnd[i]);
+                _motor.Stop();
+                if (!SendPath(path.ToArray(), destination, speed)) return false;
+                _progressPosition = Position;
+                _progressTime = Time.time;
+                if (_debugLogs) Debug.Log($"[SentinelAgent:{_agentId}] Bypassing '{contact.name}' toward {destination}.", this);
+                return true;
+            }
             return false;
+        }
+
+        private void SetMovementLocked(bool locked)
+        {
+            locked |= !IsAlive || !isActiveAndEnabled;
+            if (_animation != null) _animation.SetExternalMovementLock(locked);
+            _motor.SetMovementLocked(locked || (_animation != null && _animation.IsAttacking));
         }
 
         private void MotorArrived() { if (_moving) _motorArrived = true; }
@@ -468,8 +601,10 @@ namespace Halazia.AI.Sentinel
         private void StopNavigation()
         {
             _moving = _motorBlocked = _motorArrived = false;
+            _contact = null;
+            _bypassAttempts = 0;
             _motor.Stop();
-            _motor.SetMovementLocked(!IsAlive);
+            SetMovementLocked(!IsAlive || !isActiveAndEnabled);
             _motor.SetFaceTarget((Transform)null);
         }
         private void SetState(SentinelState state)
@@ -477,7 +612,7 @@ namespace Halazia.AI.Sentinel
             if (_state == state) return;
             StopNavigation();
             _state = state;
-            if (state == SentinelState.Attack || state == SentinelState.Dead) _motor.SetMovementLocked(true);
+            if (state == SentinelState.Attack || state == SentinelState.Dead) SetMovementLocked(true);
             if (_debugLogs) Debug.Log($"[SentinelAgent:{_agentId}] {state}", this);
         }
         private void StartSearch()
@@ -487,6 +622,7 @@ namespace Halazia.AI.Sentinel
         }
         private bool WithinDefense(Vector3 point) => (point - _post).sqrMagnitude <= _defenseRadius * _defenseRadius;
         private Vector3 ClampToDefense(Vector3 point) => _post + Vector3.ClampMagnitude(point - _post, _defenseRadius);
+        private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
         private static bool Finite(Vector3 point) => !float.IsNaN(point.x) && !float.IsInfinity(point.x) &&
             !float.IsNaN(point.y) && !float.IsInfinity(point.y) && !float.IsNaN(point.z) && !float.IsInfinity(point.z);
 
@@ -511,6 +647,7 @@ namespace Halazia.AI.Sentinel
             _repathInterval = Mathf.Max(0.1f, _repathInterval);
             _targetMoveThreshold = Mathf.Max(0.1f, _targetMoveThreshold);
             _stuckTimeout = Mathf.Max(0.5f, _stuckTimeout);
+            _maxBypassObstacleRadius = Mathf.Max(0f, _maxBypassObstacleRadius);
         }
         private void OnDrawGizmosSelected()
         {

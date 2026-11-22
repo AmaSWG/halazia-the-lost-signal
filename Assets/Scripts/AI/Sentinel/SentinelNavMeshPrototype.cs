@@ -3,7 +3,7 @@ using UnityEngine.AI;
 
 namespace Halazia.AI.Sentinel
 {
-    /// <summary>Explicit prototype, NOT Weighted A*. Requires a baked NavMesh.
+    /// <summary>Existing NavMesh path planner (legacy class name retained). Requires a baked NavMesh.
     /// Does not attach a NavMeshAgent or move the transform.</summary>
     [DisallowMultipleComponent]
     public sealed class SentinelNavMeshPrototype : SentinelPathProvider
