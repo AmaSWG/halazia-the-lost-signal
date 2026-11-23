@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.AI;
 using Halazia.AI.Commander;
@@ -11,21 +12,30 @@ namespace Halazia.Sandbox
     /// Lightweight mock implementation of ISquadAgent for testing Commander task allocation
     /// in the sandbox scene before teammate scripts (Hunter, Flanker, Sentinel) are finished.
     /// Demonstrates full decoupled integration via IAgentMotor.
+    ///
+    /// Fix: now implements OnInvestigateComplete and simulates the full Investigate → Search → Patrol
+    /// lifecycle so the Commander's investigation order management can be exercised in the sandbox.
+    /// Set _searchDwellSeconds in the Inspector (default 5 s) to match the Sentinel's intended dwell.
     /// </summary>
     [RequireComponent(typeof(AgentMotor))]
     public class MockSquadAgent : MonoBehaviour, ISquadAgent
     {
         [Header("Agent Identity")]
         [SerializeField] private string _agentId = "Agent_01";
-        [SerializeField] private AgentRole _role = AgentRole.Hunter;
+        [SerializeField] private AgentRole _role = AgentRole.Sentinel;
         [SerializeField] private float _maxHealth = 100f;
 
         [Header("State")]
         [SerializeField] private SquadTaskType _currentTask = SquadTaskType.Idle;
 
+        [Header("Investigate / Search Simulation")]
+        [Tooltip("Seconds the agent dwells at an Investigate destination before firing OnInvestigateComplete. Matches the real Sentinel Search timer.")]
+        [SerializeField] private float _searchDwellSeconds = 5f;
+
         private float _currentHealth;
         private IAgentMotor _motor;
         private SquadOrder _activeOrder;
+        private Coroutine _searchRoutine;
 
         public string AgentId => _agentId;
         public AgentRole Role => _role;
@@ -36,16 +46,37 @@ namespace Halazia.Sandbox
         public bool IsEngagedWithPlayer => _currentTask == SquadTaskType.Pursue;
         public SquadTaskType CurrentTask => _currentTask;
 
-        // Fix 3: Reporting events — fired to push state back to the Commander
+        // Reporting events — fired to push state back to the Commander
         public event Action<ISquadAgent> OnDied;
         public event Action<ISquadAgent> OnTaskArrived;
         public event Action<ISquadAgent> OnTaskBlocked;
         public event Action<ISquadAgent> OnTargetLost;
 
+        /// <summary>
+        /// Fix: fired after the Search dwell timer completes with no player contact.
+        /// The Commander subscribes to this to close the Investigate order and restore Patrol.
+        /// </summary>
+        public event Action<ISquadAgent> OnInvestigateComplete;
+
         private void Awake()
         {
             _currentHealth = _maxHealth;
             _motor = GetComponent<IAgentMotor>();
+
+            if (_motor != null)
+            {
+                _motor.OnArrived     += HandleMotorArrived;
+                _motor.OnPathBlocked += HandleMotorBlocked;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (_motor != null)
+            {
+                _motor.OnArrived     -= HandleMotorArrived;
+                _motor.OnPathBlocked -= HandleMotorBlocked;
+            }
         }
 
         private void OnEnable()
@@ -63,46 +94,35 @@ namespace Halazia.Sandbox
             if (IsAlive) OnDied?.Invoke(this);
             var commander = FindAnyObjectByType<CommanderAgent>();
             commander?.UnregisterSquadMember(this);
-        }
 
-        private void OnDestroy()
-        {
-            // Guard: only fire if not already fired by OnDisable
-            if (!IsAlive) return;
-            OnDied?.Invoke(this);
-            var commander = FindAnyObjectByType<CommanderAgent>();
-            commander?.UnregisterSquadMember(this);
-        }
-
-        private void Update()
-        {
-            if (_currentTask == SquadTaskType.Idle) return;
-            if (_motor == null) return;
-
-            if (_activeOrder.TargetPosition != Vector3.zero && !_motor.IsMoving)
+            if (_searchRoutine != null)
             {
-                float dist = Vector3.Distance(transform.position, _activeOrder.TargetPosition);
-                if (dist <= 1.8f)
-                {
-                    // Arrived at destination
-                    OnTaskArrived?.Invoke(this);
-                    _currentTask = SquadTaskType.Idle;
-                }
-                else if (_currentTask == SquadTaskType.Pursue || _currentTask == SquadTaskType.Flank ||
-                         _currentTask == SquadTaskType.Investigate || _currentTask == SquadTaskType.CoverRoute)
-                {
-                    // Stopped but not arrived: retry or report blocked
-                    ExecutePath(_activeOrder.TargetPosition);
-                }
+                StopCoroutine(_searchRoutine);
+                _searchRoutine = null;
             }
         }
 
         public void AssignOrder(SquadOrder order)
         {
+            // Cancel any in-progress Search dwell if a new order interrupts
+            if (_searchRoutine != null)
+            {
+                StopCoroutine(_searchRoutine);
+                _searchRoutine = null;
+            }
+
             _activeOrder = order;
             _currentTask = order.TaskType;
 
             Debug.Log($"[MockSquadAgent:{_agentId}] Received order: {order.TaskType} to {order.TargetPosition}");
+
+            if (order.TaskType == SquadTaskType.Patrol || order.TargetPosition == Vector3.zero)
+            {
+                // Patrol with no specific destination: stay in place for sandbox purposes
+                _motor?.Stop();
+                Debug.Log($"[MockSquadAgent:{_agentId}] Resuming Patrol (no forced destination).");
+                return;
+            }
 
             ExecutePath(order.TargetPosition);
         }
@@ -115,14 +135,10 @@ namespace Halazia.Sandbox
             Vector3 target = targetPosition;
 
             if (NavMesh.SamplePosition(start, out NavMeshHit startHit, 3.0f, NavMesh.AllAreas))
-            {
                 start = startHit.position;
-            }
 
             if (NavMesh.SamplePosition(target, out NavMeshHit targetHit, 5.0f, NavMesh.AllAreas))
-            {
                 target = targetHit.position;
-            }
 
             NavMeshPath path = new NavMeshPath();
             if (NavMesh.CalculatePath(start, target, NavMesh.AllAreas, path))
@@ -136,10 +152,63 @@ namespace Halazia.Sandbox
                     }
                 }
             }
+            else
+            {
+                Debug.LogWarning($"[MockSquadAgent:{_agentId}] NavMesh path failed to {target}. Reporting blocked.");
+                OnTaskBlocked?.Invoke(this);
+            }
+        }
+
+        /// <summary>
+        /// Called by AgentMotor when the agent reaches the final waypoint.
+        /// For Investigate orders: fires OnTaskArrived then starts the Search dwell coroutine.
+        /// For all other orders: fires OnTaskArrived and returns to Idle.
+        /// </summary>
+        private void HandleMotorArrived()
+        {
+            OnTaskArrived?.Invoke(this);
+
+            if (_currentTask == SquadTaskType.Investigate)
+            {
+                // Navigation complete — begin Search dwell. Do NOT change _currentTask yet;
+                // it stays Investigate so the Commander's deduplication guard does not re-dispatch.
+                Debug.Log($"[MockSquadAgent:{_agentId}] Arrived at investigate position. Starting {_searchDwellSeconds}s Search dwell.");
+                _searchRoutine = StartCoroutine(SearchDwellRoutine());
+            }
+            else
+            {
+                Debug.Log($"[MockSquadAgent:{_agentId}] Arrived at {_currentTask} destination.");
+                _currentTask = SquadTaskType.Idle;
+            }
+        }
+
+        /// <summary>
+        /// Simulates the Sentinel's 5-second Search behaviour. Waits _searchDwellSeconds then
+        /// fires OnInvestigateComplete, signalling the Commander that the full cycle is done.
+        /// </summary>
+        private IEnumerator SearchDwellRoutine()
+        {
+            yield return new WaitForSeconds(_searchDwellSeconds);
+
+            Debug.Log($"[MockSquadAgent:{_agentId}] Search dwell complete. No player found. Firing OnInvestigateComplete.");
+            _currentTask = SquadTaskType.Idle;
+            _searchRoutine = null;
+            OnInvestigateComplete?.Invoke(this);
+        }
+
+        private void HandleMotorBlocked()
+        {
+            Debug.LogWarning($"[MockSquadAgent:{_agentId}] Path blocked on task {_currentTask}.");
+            OnTaskBlocked?.Invoke(this);
         }
 
         public void CancelOrder()
         {
+            if (_searchRoutine != null)
+            {
+                StopCoroutine(_searchRoutine);
+                _searchRoutine = null;
+            }
             _currentTask = SquadTaskType.Idle;
             _motor?.Stop();
         }
@@ -157,22 +226,15 @@ namespace Halazia.Sandbox
             }
         }
 
-        /// <summary>Fires OnPathBlocked so the Commander reassigns this agent.</summary>
-        private void OnPathBlockedHandler()
-        {
-            OnTaskBlocked?.Invoke(this);
-        }
-
         private void OnDrawGizmos()
         {
-            // Draw current role and task over the agent
 #if UNITY_EDITOR
             Color roleColor = _role switch
             {
-                AgentRole.Hunter => Color.red,
-                AgentRole.Flanker => Color.yellow,
+                AgentRole.Hunter   => Color.red,
+                AgentRole.Flanker  => Color.yellow,
                 AgentRole.Sentinel => Color.blue,
-                _ => Color.white
+                _                  => Color.white
             };
 
             Gizmos.color = roleColor;
