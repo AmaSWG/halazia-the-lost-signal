@@ -5,8 +5,6 @@ using UnityEngine.AI;
 using Halazia.Shared.Combat;
 using Halazia.Shared.Movement;
 using Halazia.Shared.Squad;
-using SharedSquadAgent = Halazia.Shared.Squad.ISquadAgent;
-
 
 namespace Halazia.AI.Commander
 {
@@ -19,7 +17,7 @@ namespace Halazia.AI.Commander
     /// </summary>
     [RequireComponent(typeof(AgentMotor))]
     [DisallowMultipleComponent]
-    public class CommanderAgent : MonoBehaviour, SharedSquadAgent
+    public class CommanderAgent : MonoBehaviour, ISquadAgent
     {
         [Header("Tactical Perception")]
         [Tooltip("Direct reference or transform of the player to observe.")]
@@ -31,12 +29,28 @@ namespace Halazia.AI.Commander
         [Tooltip("Distance at which Commander prefers to oversee combat without engaging in close-quarters melee.")]
         [SerializeField] private float _preferredCommandDistance = 12.0f;
 
+        [Header("Perception & Line of Sight")]
+        [Tooltip("Maximum sight range for Commander's direct vision.")]
+        [SerializeField] private float _visionRange = 22.0f;
+
+        [Tooltip("Field of view angle (degrees) for Commander's forward vision cone.")]
+        [SerializeField] private float _visionFovAngle = 120.0f;
+
+        [Tooltip("Physics layer mask for line-of-sight obstruction (walls, barricades, bulkheads).")]
+        [SerializeField] private LayerMask _obstacleMask = ~0;
+
+        [Tooltip("Duration in seconds that combat state persists after last sighting.")]
+        [SerializeField] private float _combatWindowSeconds = 8.0f;
+
+        [Tooltip("If true, Commander strictly requires direct Line of Sight or a squad report to locate the player. If false, Commander tracks player position directly (useful for rapid sandbox testing).")]
+        [SerializeField] private bool _requireLineOfSightOrSquadReport = true;
+
         [Header("Self-Defense & Combat")]
         [Tooltip("Distance at which Commander executes a defensive melee strike (highest priority, ≤ close-quarters range).")]
-        [SerializeField] private float _meleeAttackDistance = 2.5f;
+        [SerializeField] private float _meleeAttackDistance = 3.2f;
 
         [Tooltip("Distance below which Commander halts movement and enters close-quarters defense. Melee fires when cooldown allows.")]
-        [SerializeField] private float _closeQuartersDistance = 2.8f;
+        [SerializeField] private float _closeQuartersDistance = 3.5f;
 
         [Tooltip("Distance below which Commander begins active tactical retreat away from the player.")]
         [SerializeField] private float _retreatTriggerDistance = 8.0f;
@@ -61,7 +75,7 @@ namespace Halazia.AI.Commander
         [Header("Sub-Systems")]
         [SerializeField] private CorridorHeatmapTracker _heatmapTracker;
 
-        // SharedSquadAgent implementation for the Commander itself
+        // ISquadAgent implementation for the Commander itself
         public string AgentId => "Commander_01";
         public AgentRole Role => AgentRole.Commander;
         public Vector3 Position => transform.position;
@@ -70,10 +84,6 @@ namespace Halazia.AI.Commander
         public bool IsAlive => _currentHealth > 0.001f;
         public bool IsEngagedWithPlayer => _isPlayerDetected;
         public SquadTaskType CurrentTask => _currentSelfTask;
-        public event Action<SharedSquadAgent> OnTaskArrived;
-        public event Action<SharedSquadAgent> OnTaskBlocked;
-        public event Action<SharedSquadAgent> OnTargetLost;
-        public event Action<SharedSquadAgent> OnDied;
 
         [Header("Commander Health & State")]
         [SerializeField] private float _maxHealth = 150f;
@@ -81,7 +91,7 @@ namespace Halazia.AI.Commander
         private SquadTaskType _currentSelfTask = SquadTaskType.Idle;
 
         // Squad tracking
-        private readonly List<SharedSquadAgent> _registeredSquad = new List<SharedSquadAgent>();
+        private readonly List<ISquadAgent> _registeredSquad = new List<ISquadAgent>();
         private SquadUtilityAllocator _utilityAllocator;
         private IAgentMotor _motor;
         private ICombatActions _combatActions;   // Fix 1: resolved at Awake, never AgentAnimatorDriver directly
@@ -89,8 +99,9 @@ namespace Halazia.AI.Commander
         // Combat perception state
         private bool _isPlayerDetected = false;
         private Vector3 _lastKnownPlayerPosition;
+        private float _timeSincePlayerDetected = 999f;
         private float _tickTimer = 0f;
-        private readonly Dictionary<SharedSquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<SharedSquadAgent, Vector3>();
+        private readonly Dictionary<ISquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<ISquadAgent, Vector3>();
 
         private void Awake()
         {
@@ -112,7 +123,7 @@ namespace Halazia.AI.Commander
             // Fix 3: Register initial squad and subscribe to their reporting events
             foreach (var mono in _initialSquadMembers)
             {
-                if (mono is SharedSquadAgent squadAgent)
+                if (mono is ISquadAgent squadAgent)
                     RegisterSquadMember(squadAgent);
             }
         }
@@ -133,6 +144,17 @@ namespace Halazia.AI.Commander
         {
             float deltaTime = Time.deltaTime;
             _tickTimer += deltaTime;
+
+            // Combat window countdown: exit combat mode if no sighting within _combatWindowSeconds (8s)
+            if (_isPlayerDetected)
+            {
+                _timeSincePlayerDetected += deltaTime;
+                if (_timeSincePlayerDetected >= _combatWindowSeconds)
+                {
+                    _isPlayerDetected = false;
+                    Debug.Log($"[CommanderAgent] Combat window expired ({_combatWindowSeconds:F1}s without sighting). Squad transitioning to patrol/search.");
+                }
+            }
 
             // Evaluate mutually exclusive behaviour mode each frame and execute per-frame actions
             EvaluateAndExecuteBehaviourMode();
@@ -232,8 +254,21 @@ namespace Halazia.AI.Commander
         {
             Debug.Log($"[CommanderAgent] ⚔️ Player in close quarters ({Vector3.Distance(transform.position, _playerTransform.position):F1}m)! Commander executes tactical defense strike!");
 
-            // Fix 1: Uses ICombatActions — no reference to AgentAnimatorDriver
-            _combatActions?.Attack();
+            if (_combatActions == null)
+            {
+                _combatActions = GetComponent<ICombatActions>() ?? GetComponentInChildren<ICombatActions>();
+            }
+
+            if (_combatActions != null)
+            {
+                _combatActions.Attack();
+            }
+            else
+            {
+                // Fallback: drive attack directly through AgentAnimatorDriver
+                var driver = GetComponent<AgentAnimatorDriver>() ?? GetComponentInChildren<AgentAnimatorDriver>();
+                driver?.PlayAttack();
+            }
         }
 
         #region Squad Registry Management
@@ -242,12 +277,9 @@ namespace Halazia.AI.Commander
         /// Registers a squad member and subscribes to all its reporting events.
         /// Safe to call at runtime (e.g. when a new agent spawns mid-mission).
         /// </summary>
-        public void RegisterSquadMember(SharedSquadAgent agent)
+        public void RegisterSquadMember(ISquadAgent agent)
         {
-            if (agent == null || ReferenceEquals(agent, this) ||
-                _registeredSquad.Contains(agent))
-                return;
-
+            if (agent == null || agent == (ISquadAgent)this || _registeredSquad.Contains(agent)) return;
 
             _registeredSquad.Add(agent);
 
@@ -264,7 +296,7 @@ namespace Halazia.AI.Commander
         /// Unregisters a squad member and unsubscribes from all events.
         /// Call when an agent is destroyed so the Commander holds no dead references.
         /// </summary>
-        public void UnregisterSquadMember(SharedSquadAgent agent)
+        public void UnregisterSquadMember(ISquadAgent agent)
         {
             if (agent == null || !_registeredSquad.Contains(agent)) return;
 
@@ -281,7 +313,7 @@ namespace Halazia.AI.Commander
 
         // ── Event reactions ──────────────────────────────────────────────────────
 
-        private void OnAgentDied(SharedSquadAgent agent)
+        private void OnAgentDied(ISquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' died. Removing from roster and forcing reallocation.");
             UnregisterSquadMember(agent);
@@ -289,19 +321,19 @@ namespace Halazia.AI.Commander
             _tickTimer = _decisionTickInterval;
         }
 
-        private void OnAgentTaskBlocked(SharedSquadAgent agent)
+        private void OnAgentTaskBlocked(ISquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' path blocked on task {agent.CurrentTask}. Forcing reallocation.");
             _tickTimer = _decisionTickInterval;
         }
 
-        private void OnAgentTaskArrived(SharedSquadAgent agent)
+        private void OnAgentTaskArrived(ISquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' arrived at task destination ({agent.CurrentTask}).");
             // Optionally reassign a follow-up task next tick
         }
 
-        private void OnAgentTargetLost(SharedSquadAgent agent)
+        private void OnAgentTargetLost(ISquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' lost sight of target. Switching to Investigate.");
             // Issue an Investigate order at the last known player position
@@ -327,7 +359,7 @@ namespace Halazia.AI.Commander
             List<SquadOrder> orders = FormulateTacticalOrders();
 
             // 4. Filter only currently active and alive squad members (non-destructive)
-            var activeSquad = new List<SharedSquadAgent>();
+            var activeSquad = new List<ISquadAgent>();
             foreach (var agent in _registeredSquad)
             {
                 if (agent != null && agent.IsAlive)
@@ -345,7 +377,7 @@ namespace Halazia.AI.Commander
 
                 foreach (var pair in assignments)
                 {
-                    SharedSquadAgent agent = pair.Key;
+                    ISquadAgent agent = pair.Key;
                     SquadOrder order = pair.Value;
 
                     bool taskChanged = agent.CurrentTask != order.TaskType;
@@ -372,7 +404,7 @@ namespace Halazia.AI.Commander
                 var found = FindObjectsOfType<MonoBehaviour>();
                 foreach (var mb in found)
                 {
-                    if (mb is SharedSquadAgent squadAgent && (MonoBehaviour)squadAgent != this)
+                    if (mb is ISquadAgent squadAgent && (MonoBehaviour)squadAgent != this)
                     {
                         RegisterSquadMember(squadAgent);
                     }
@@ -380,20 +412,88 @@ namespace Halazia.AI.Commander
             }
         }
 
+        /// <summary>
+        /// Called by squad members (Hunter, Flanker, Sentinel) or perception sensors when the player is detected.
+        /// Preserves architectural decoupling: Commander updates last known coordinates without wallhacking.
+        /// </summary>
+        public void ReportPlayerSighted(Vector3 playerPosition)
+        {
+            _lastKnownPlayerPosition = playerPosition;
+            _timeSincePlayerDetected = 0f;
+            _isPlayerDetected = true;
+
+            // Feed player location into the Markovian corridor heatmap
+            if (_heatmapTracker != null)
+            {
+                _heatmapTracker.NotifyCombatDetection();
+                _heatmapTracker.SamplePlayerLocation(_lastKnownPlayerPosition);
+            }
+        }
+
         private void UpdatePlayerObservation()
         {
-            if (_playerTransform != null)
-            {
-                _lastKnownPlayerPosition = _playerTransform.position;
-                _isPlayerDetected = true;
+            if (_playerTransform == null) return;
 
-                // Feed player location into the Markovian corridor heatmap
-                if (_heatmapTracker != null)
+            // 1. Direct vision check: Does the Commander have unobstructed line-of-sight to the player?
+            if (HasDirectLineOfSightToPlayer())
+            {
+                ReportPlayerSighted(_playerTransform.position);
+                return;
+            }
+
+            // 2. Squad intelligence check: Is any registered squad member currently engaged with the player?
+            foreach (var agent in _registeredSquad)
+            {
+                if (agent != null && agent.IsAlive && agent.IsEngagedWithPlayer)
                 {
-                    _heatmapTracker.NotifyCombatDetection();
-                    _heatmapTracker.SamplePlayerLocation(_lastKnownPlayerPosition);
+                    ReportPlayerSighted(_playerTransform.position);
+                    return;
                 }
             }
+
+            // 3. Fallback if strict line-of-sight is disabled (e.g. testing in sandbox without agents)
+            if (!_requireLineOfSightOrSquadReport)
+            {
+                ReportPlayerSighted(_playerTransform.position);
+            }
+        }
+
+        /// <summary>
+        /// Checks whether the Commander has an unobstructed line of sight to the player
+        /// within vision range and forward field of view cone.
+        /// </summary>
+        public bool HasDirectLineOfSightToPlayer()
+        {
+            if (_playerTransform == null) return false;
+
+            Vector3 eyePos = transform.position + Vector3.up * 1.5f;
+            Vector3 targetPos = _playerTransform.position + Vector3.up * 1.2f;
+            Vector3 toTarget = targetPos - eyePos;
+            float dist = toTarget.magnitude;
+
+            if (dist > _visionRange) return false;
+
+            // Outside close quarters, check forward vision angle
+            if (dist > _closeQuartersDistance)
+            {
+                Vector3 toTargetFlat = new Vector3(toTarget.x, 0f, toTarget.z);
+                if (toTargetFlat.sqrMagnitude > 0.001f)
+                {
+                    float angle = Vector3.Angle(transform.forward, toTargetFlat.normalized);
+                    if (angle > _visionFovAngle * 0.5f) return false;
+                }
+            }
+
+            // Raycast for obstacles (bulkheads, walls, barricades)
+            if (Physics.Raycast(eyePos, toTarget.normalized, out RaycastHit hit, dist, _obstacleMask, QueryTriggerInteraction.Ignore))
+            {
+                if (!hit.transform.CompareTag("Player") && hit.transform != _playerTransform)
+                {
+                    return false; // Vision obstructed
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -577,7 +677,12 @@ namespace Halazia.AI.Commander
 
         #endregion
 
-        #region SharedSquadAgent Interface Methods
+        #region ISquadAgent Interface Methods
+
+        public event Action<ISquadAgent> OnTaskArrived;
+        public event Action<ISquadAgent> OnTaskBlocked;
+        public event Action<ISquadAgent> OnTargetLost;
+        public event Action<ISquadAgent> OnDied;
 
         public void AssignOrder(SquadOrder order)
         {
@@ -638,6 +743,12 @@ namespace Halazia.AI.Commander
                     Gizmos.DrawLine(transform.position + Vector3.up * 1.5f, agent.Position + Vector3.up * 1.5f);
                 }
             }
+
+#if UNITY_EDITOR
+            Gizmos.color = new Color(0.65f, 0.25f, 0.9f);
+            Gizmos.DrawWireSphere(transform.position + Vector3.up * 2f, 0.25f);
+            UnityEditor.Handles.Label(transform.position + Vector3.up * 2.3f, $"Commander\n[{_behaviourMode}]");
+#endif
         }
 
         #endregion
