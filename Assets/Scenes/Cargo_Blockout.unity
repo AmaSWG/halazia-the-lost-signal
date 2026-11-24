@@ -1015,6 +1015,11 @@ CapsuleCollider:
   m_Height: 2
   m_Direction: 1
   m_Center: {x: 0, y: 0, z: 0}
+--- !u!1 &1180677974 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 3755611610577797135, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
+  m_PrefabInstance: {fileID: 1491993946}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1185055260
 GameObject:
   m_ObjectHideFlags: 0
@@ -1553,9 +1558,17 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: 521742895852955237, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
+      propertyPath: _motorSource
+      value: 
+      objectReference: {fileID: 1614978653}
+    - target: {fileID: 521742895852955237, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
       propertyPath: animatorTarget
       value: 
       objectReference: {fileID: 5866666020222869147}
+    - target: {fileID: 521742895852955237, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
+      propertyPath: _attackTriggerName
+      value: MeleeAttack
+      objectReference: {fileID: 0}
     - target: {fileID: 769574979188279383, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
       propertyPath: viewAngle
       value: 120
@@ -1624,13 +1637,20 @@ PrefabInstance:
       propertyPath: m_Enabled
       value: 0
       objectReference: {fileID: 0}
-    m_RemovedComponents: []
+    m_RemovedComponents:
+    - {fileID: 5355137800431963924, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
     m_RemovedGameObjects: []
     m_AddedGameObjects:
     - targetCorrespondingSourceObject: {fileID: 4046127245958496972, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
       insertIndex: -1
       addedObject: {fileID: 543450651879851233}
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 3755611610577797135, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1614978660}
+    - targetCorrespondingSourceObject: {fileID: 3755611610577797135, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1614978661}
   m_SourcePrefab: {fileID: 100100000, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
 --- !u!1 &1551847154
 GameObject:
@@ -1770,6 +1790,128 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 4046127245958496972, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
   m_PrefabInstance: {fileID: 1491993946}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &1614978653 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 2947667450528893911, guid: 596bdc7eee88de04d9ec9316efddf484, type: 3}
+  m_PrefabInstance: {fileID: 1491993946}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1180677974}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f7921a9acc5446a5ab54723f8890743c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Halazia.Shared.Movement.AgentMotor
+--- !u!82 &1614978660
+AudioSource:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1180677974}
+  m_Enabled: 1
+  serializedVersion: 4
+  OutputAudioMixerGroup: {fileID: 0}
+  m_audioClip: {fileID: 0}
+  m_Resource: {fileID: 8300000, guid: 9bf076773a164e742988d171184fe4fa, type: 3}
+  m_PlayOnAwake: 0
+  m_Volume: 1
+  m_Pitch: 1
+  Loop: 1
+  Mute: 0
+  Spatialize: 0
+  SpatializePostEffects: 0
+  Priority: 128
+  DopplerLevel: 1
+  MinDistance: 2
+  MaxDistance: 15
+  Pan2D: 0
+  rolloffMode: 0
+  BypassEffects: 0
+  BypassListenerEffects: 0
+  BypassReverbZones: 0
+  rolloffCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  panLevelCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  spreadCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  reverbZoneMixCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+--- !u!114 &1614978661
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1180677974}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fa4ee07fafa6ddf4b9b240d1accbb7e2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HunterFootstepAudio
+  footstepClip: {fileID: 8300000, guid: 9bf076773a164e742988d171184fe4fa, type: 3}
+  movementThreshold: 0.1
 --- !u!4 &11206583671215272
 Transform:
   m_ObjectHideFlags: 0
@@ -1950,12 +2092,12 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4954896124617595414}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.000000053385076, y: 0.7071068, z: 0.70710677, w: -0.00000005338508}
-  m_LocalPosition: {x: 0.0002675813, y: 2.1212099, z: -0.19627824}
-  m_LocalScale: {x: 99.999985, y: 99.999985, z: 99.999985}
+  m_LocalRotation: {x: -7.1054274e-15, y: -0.000000029802322, z: 1, w: -0.000000075497894}
+  m_LocalPosition: {x: 0, y: 0.0020522408, z: 0.0057082875}
+  m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 543450651879851233}
+  m_Father: {fileID: 7038045951999050056}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &382935083658202511
 GameObject:
@@ -2088,7 +2230,6 @@ Transform:
   - {fileID: 1711910972354395459}
   - {fileID: 1337258931125718102}
   - {fileID: 6196069602099971526}
-  - {fileID: 322025009877809633}
   - {fileID: 7038045951999050056}
   - {fileID: 6385452221891755369}
   m_Father: {fileID: 1614978649}
@@ -2590,6 +2731,7 @@ GameObject:
   m_Component:
   - component: {fileID: 543450651879851233}
   - component: {fileID: 5866666020222869147}
+  - component: {fileID: 5866666020222869148}
   m_Layer: 0
   m_Name: armor_rigging
   m_TagString: Untagged
@@ -5347,6 +5489,20 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
+--- !u!114 &5866666020222869148
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 919132147626843739}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a180153f893a55242969bc263d7364b2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HunterMeleeAudio
+  audioSource: {fileID: 1614978660}
+  punchSound: {fileID: 8300000, guid: 02547113254df7347ac826d94b87fc5c, type: 3}
 --- !u!1 &5934879102939759404
 GameObject:
   m_ObjectHideFlags: 0
@@ -6093,7 +6249,8 @@ Transform:
   m_LocalPosition: {x: -0.000000002045211, y: 1.5503812, z: 0.00894579}
   m_LocalScale: {x: 99.999985, y: 99.999985, z: 99.999985}
   m_ConstrainProportionsScale: 0
-  m_Children: []
+  m_Children:
+  - {fileID: 322025009877809633}
   m_Father: {fileID: 543450651879851233}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!137 &7046744554580851380
