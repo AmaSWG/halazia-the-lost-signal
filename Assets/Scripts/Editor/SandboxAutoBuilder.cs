@@ -90,9 +90,20 @@ namespace Halazia.Editor
             playerObj.transform.position = new Vector3(0f, 1f, -4f);
             if (matPlayer != null) playerObj.GetComponent<Renderer>().sharedMaterial = matPlayer;
 
-            // 9. Corridor Heatmap System
+            // 9. Tactical Corridor Junctions & Heatmap System
             var heatmapObj = new GameObject("Corridor_Heatmap_System");
             var heatmap = heatmapObj.AddComponent<CorridorHeatmapTracker>();
+
+            var nodeCargo = CreateCorridorNodeMarker("Cargo_Stairs", new Vector3(-8f, 0f, 5f), 3.5f, heatmapObj.transform);
+            var nodeDoor = CreateCorridorNodeMarker("GunDeck_Door", new Vector3(0f, 0f, 8f), 3.5f, heatmapObj.transform);
+            var nodeLadder = CreateCorridorNodeMarker("Bridge_Ladder", new Vector3(8f, 0f, 5f), 3.5f, heatmapObj.transform);
+
+            // Connect adjacent nodes into a topological corridor graph
+            nodeCargo.ConnectedNodes.Add(nodeDoor);
+            nodeDoor.ConnectedNodes.Add(nodeCargo);
+            nodeDoor.ConnectedNodes.Add(nodeLadder);
+            nodeLadder.ConnectedNodes.Add(nodeDoor);
+
             heatmap.RegisterNode("Cargo_Stairs", new Vector3(-8f, 0f, 5f), 3.5f);
             heatmap.RegisterNode("GunDeck_Door", new Vector3(0f, 0f, 8f), 3.5f);
             heatmap.RegisterNode("Bridge_Ladder", new Vector3(8f, 0f, 5f), 3.5f);
@@ -343,6 +354,18 @@ namespace Halazia.Editor
 
             EditorUtility.SetDirty(mat);
             return mat;
+        }
+
+        private static CorridorNodeMarker CreateCorridorNodeMarker(string nodeId, Vector3 position, float radius, Transform parent)
+        {
+            var nodeObj = new GameObject($"Node_{nodeId}");
+            nodeObj.transform.position = position;
+            if (parent != null) nodeObj.transform.SetParent(parent);
+
+            var marker = nodeObj.AddComponent<CorridorNodeMarker>();
+            marker.NodeId = nodeId;
+            marker.Radius = radius;
+            return marker;
         }
 
         private static void EnsureDirectory(string path)

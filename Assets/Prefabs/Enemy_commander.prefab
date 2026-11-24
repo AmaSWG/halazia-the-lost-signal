@@ -1,0 +1,90 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &7343690659389956226
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 3605612028829755900, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_Name
+      value: Enemy_commander
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4125971971910775622, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    m_RemovedComponents:
+    - {fileID: 3867951100008207258, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 3605612028829755900, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1840433645421018018}
+  m_SourcePrefab: {fileID: 100100000, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+--- !u!1 &6333101997730761086 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 3605612028829755900, guid: 359f0a95bde61f448adeb6b107e8dfee, type: 3}
+  m_PrefabInstance: {fileID: 7343690659389956226}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &1840433645421018018
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6333101997730761086}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a87ed713b7784f6d8ac8da15c2a74f2d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Halazia.AI.Commander.CommanderAgent
+  _playerTransform: {fileID: 0}
+  _decisionTickInterval: 0.5
+  _preferredCommandDistance: 12
+  _meleeAttackDistance: 2.5
+  _closeQuartersDistance: 2.8
+  _retreatTriggerDistance: 8
+  _attackCooldown: 1.2
+  _initialSquadMembers: []
+  _heatmapTracker: {fileID: 0}
+  _maxHealth: 150

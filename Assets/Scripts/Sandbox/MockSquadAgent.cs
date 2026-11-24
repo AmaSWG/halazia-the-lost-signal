@@ -14,7 +14,7 @@ namespace Halazia.Sandbox
     /// Uses IAgentMotor for movement.
     /// </summary>
     [RequireComponent(typeof(AgentMotor))]
-    public class MockSquadAgent : MonoBehaviour, Halazia.AI.Commander.ISquadAgent
+    public class MockSquadAgent : MonoBehaviour, Halazia.Shared.Squad.ISquadAgent
     {
         [Header("Agent Identity")]
         [SerializeField] private string _agentId = "Agent_01";
@@ -23,11 +23,13 @@ namespace Halazia.Sandbox
 
         [Header("State")]
         [SerializeField] private SquadTaskType _currentTask = SquadTaskType.Idle;
+        [SerializeField, Min(0f)] private float _searchDwellSeconds = 5f;
 
         private float _currentHealth;
         private IAgentMotor _motor;
         private SquadOrder _activeOrder;
-        private bool _deathReported;
+        private bool _deathReported, _arrivedReported;
+        private Coroutine _investigationRoutine;
 
         public string AgentId => _agentId;
         public AgentRole Role => _role;
@@ -47,6 +49,7 @@ namespace Halazia.Sandbox
         public event Action<Halazia.Shared.Squad.ISquadAgent> OnTaskArrived;
         public event Action<Halazia.Shared.Squad.ISquadAgent> OnTaskBlocked;
         public event Action<Halazia.Shared.Squad.ISquadAgent> OnTargetLost;
+        public event Action<Halazia.Shared.Squad.ISquadAgent> OnInvestigateComplete;
 
         private void Awake()
         {
@@ -95,8 +98,20 @@ namespace Halazia.Sandbox
 
                 if (distance <= 1.8f)
                 {
-                    _currentTask = SquadTaskType.Idle;
-                    OnTaskArrived?.Invoke(this);
+                    if (!_arrivedReported)
+                    {
+                        _arrivedReported = true;
+                        OnTaskArrived?.Invoke(this);
+                    }
+                    if (_currentTask == SquadTaskType.Investigate)
+                    {
+                        if (_investigationRoutine == null)
+                            _investigationRoutine = StartCoroutine(CompleteInvestigationAfterDwell());
+                    }
+                    else
+                    {
+                        _currentTask = SquadTaskType.Idle;
+                    }
                 }
                 else if (
                     _currentTask == SquadTaskType.Pursue ||
@@ -111,8 +126,14 @@ namespace Halazia.Sandbox
 
         public void AssignOrder(SquadOrder order)
         {
+            if (_investigationRoutine != null)
+            {
+                StopCoroutine(_investigationRoutine);
+                _investigationRoutine = null;
+            }
             _activeOrder = order;
             _currentTask = order.TaskType;
+            _arrivedReported = false;
 
             Debug.Log(
                 $"[MockSquadAgent:{_agentId}] Received order: " +
@@ -187,8 +208,23 @@ namespace Halazia.Sandbox
 
         public void CancelOrder()
         {
+            if (_investigationRoutine != null)
+            {
+                StopCoroutine(_investigationRoutine);
+                _investigationRoutine = null;
+            }
             _currentTask = SquadTaskType.Idle;
+            _arrivedReported = false;
             _motor?.Stop();
+        }
+
+        private System.Collections.IEnumerator CompleteInvestigationAfterDwell()
+        {
+            yield return new WaitForSeconds(_searchDwellSeconds);
+            _investigationRoutine = null;
+            if (!IsAlive || _currentTask != SquadTaskType.Investigate) yield break;
+            OnInvestigateComplete?.Invoke(this);
+            if (_currentTask == SquadTaskType.Investigate) _currentTask = SquadTaskType.Idle;
         }
 
         public void TakeDamage(float damage)
