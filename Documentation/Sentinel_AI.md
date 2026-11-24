@@ -1,36 +1,41 @@
-# Sentinel AI — completion audit (2026-11-22)
+# Sentinel AI: status and verification (updated 2026-11-23)
 
-## Status and architecture
+## Architecture
 
-The existing SentinelAgent FSM is retained. Navigation remains SentinelNavMeshPrototype -> AgentMotor -> CharacterController. The provider plans complete NavMesh corner paths; only the motor moves the character. The provider's historical name is preserved for serialized compatibility. Weighted A* is not required by any supplied requirement and is not a missing completion dependency.
+The existing SentinelAgent FSM is unchanged: `Idle, Patrol, MoveToOrder, Guard, Investigate, Search, Chase, Attack, ReturnToPost, Dead`. Navigation is SentinelNavMeshPrototype (plans complete NavMesh corner paths) -> AgentMotor (the only thing that moves the body) -> CharacterController. No NavMeshAgent and no root motion are used.
 
-| Feature | Current implementation | Verification |
+Animation runs on the `Sentinel_Robot` child: Animator (`SentinelAnimator.controller`, Generic rig, the model's own Avatar, Apply Root Motion off), AgentAnimatorDriver and CombatActionsAdapter. SentinelAgent reaches them through `ICombatActions` / `AgentAnimatorDriver` found in its children.
+
+## Verification actually executed (2026-11-23)
+
+All runs used Unity 6000.6.5f1 in batch mode on an exact copy of this project's Assets/Packages/ProjectSettings (the project itself was open in the Editor).
+
+| Check | Command | Result |
 | --- | --- | --- |
-| Navigation | Complete-path checks, endpoint tolerance, throttled repaths, stuck/blocked reports | Code reviewed; runtime pending |
-| Patrol/guard | Ordered route, waits, looping/non-looping, null-route fallback, home return | Existing regression checks reviewed; execution blocked |
-| Detection/tracking | FOV, range, solid-wall LOS, remembered visible position, timeout/search/return | New physics regression written; execution blocked |
-| Commander | Registration, all eight orders, arrival/block/loss/death events, visible sight reports | New integration checks written; execution blocked |
-| Combat/health | LOS/range/facing/cooldown gates, finite positive damage, terminal death | New damage/occlusion checks written; execution blocked |
-| Animation | Child combat adapter lookup, death dispatch, independent decision/attack/death locks, recovery pause | Compiles; visual timing pending |
-| Escape denial | CoverRoute relocates defense center to choke point; preserves corridor ID; bounded engagement and return | Logic checks added; physical corridor trial pending |
-| Reciprocal damage | Optional SentinelTestWeapon raycasts first solid hit to Sentinel health | Compiles; no existing production weapon exists |
-| Scene/prefab | Wired primitive test scene and standalone Sentinel prefab saved; animated/player setup builder supplied | Static references checked; Unity import/bake pending |
+| Compile (runtime + Editor) | `Tools/Compile-Sentinel.ps1` | PASS |
+| Regression suite | `SentinelRegressionChecks.Run` | PASS: 13 regression + 15 integration |
+| Commander integration, Play Mode | `SentinelCommanderPlayModeProbe.Run` | PASS: 14/14 (register, CoverRoute, HoldPosition, blocked report, cancel, Pursue, target-lost, Investigate, search, no re-issue, patrol resume) |
+| Patrol, Play Mode (4 modes) | `SentinelPatrolPlayModeProbe.Run / RunStartPatrolRoute / RunIssueSelectedPatrol / RunTargetCollider` | PASS: 7-10 waypoint visits, 0 blocks, 0 navigation warnings |
+| Baked paths incl. corridor nodes | `SentinelTestSceneTools.VerifyPaths` | PASS |
+| Animation on the real model | `SentinelAnimationSetupCheck.Run` | PASS: Idle/Walk/Run loop, Attack/TakeDamage/Death play once, all curves bind to Sentinel bones |
+| Attack damage sync, Play Mode (manual, by the author) | temporary SentinelAttackHitProbe (since removed) | PASS: 7 hits at the impact event, exactly 15 each (last hit 10 -> 0) |
 
-There are no claims of successful Play Mode testing or passing runtime regressions. Unity 6000.6.5f1 was invoked on 2026-11-22 but exited before project load with code **198**, `No valid Unity Editor license found. Please activate your license.` See `Logs/SentinelRegression-current.log`.
+New checks were also run against the previous code to prove they detect the bugs they guard (disabled-Commander adoption; off-mesh start).
 
-`Tools/Compile-Sentinel.ps1` successfully compiles all Assets/Scripts runtime and Editor C# using the installed Unity compiler/assemblies and installed template Input System/AI Navigation DLLs. Existing obsolete-API, unused-event and Inspector-assignment warnings remain. This fallback does not prove import against the exact resolved package versions, a player build, native physics execution, or animation behavior. Run the actual Unity checks after licensing.
+## Combat and damage
 
-## Changes and scope
+- Attack requires a valid visible target within the defense radius, 1.8 m range and 30 degree facing; cooldown 1.2 s; damage 15.
+- **Damage is applied at the Attack clip's impact frame**, not at swing start: `Sentinel_Rig|Attack` has an `AnimEvent_AttackHit` event at normalized time 0.5 (frame 15/30, arm fully extended), stored in `Sentinel_Robot.fbx.meta`. AgentAnimatorDriver raises `OnAttackHitWindow`; SentinelAgent applies the pending hit once.
+- At impact the hit is re-checked: attacker alive/enabled/still attacking the same order; target active, alive and unchanged; in range; in line of sight; within the facing angle. Any failure cancels the hit (logged as `Attack missed at impact: <reason>` when Debug Logs is on).
+- A pending hit is cancelled when the Sentinel takes damage (hit reaction), dies, changes state, is disabled, or the attack ends without an impact event. One swing can damage at most once.
+- Without an animator driver (e.g. a primitive prefab) damage is applied immediately at the swing, as before.
+- A dead target is no longer valid: the Sentinel logs "Contact lost", reports target loss once, then investigates/searches/returns.
 
-- Preserved the pre-existing uncommitted Sentinel implementation, twelve checks, and scene work.
-- Sentinel now reports only visible last-known coordinates through Commander's existing ReportPlayerSighted API, including observations made while guarding/under orders.
-- Sentinel resolves optional child combat/animation components and calls TriggerDie on lethal damage.
-- AgentAnimatorDriver now composes external decision, attack-recovery and death locks. Late completion events cannot resurrect motion, and repeated completion is ignored. Sentinel waits through recovery before starting a path or counting stuck time. This shared-file edit is necessary because the previous animation coroutine could unlock a dead/disabled Sentinel.
-- Commander receives three small integration fixes: clear dispatch suppression on a blocked report so the same order can retry, exclude disabled members from allocation, and avoid rediscovering dead/disabled members. Tactical scoring/prediction is unchanged.
-- Added SentinelTestWeapon and SentinelEvaluationControls without modifying FirstPersonController, other role AI, shared enemy prefabs, or shared controllers.
-- Added SentinelEvaluationSetup to configure the existing fixture, create a Sentinel-only animator from existing clips, save an animated Sentinel prefab, and set up a first-person test target. It must still run in licensed Unity.
+## Commander integration
 
-Damage is applied once at the attack decision, not by an animation hit event. Do not connect OnAttackHitWindow to a second damage call. The animation recovery may make attacks slower than the cooldown; it never permits faster attacks. Player death exposes SentinelTargetHealth's existing death event; a production game-over/respawn flow remains the player team's integration responsibility.
+- The Sentinel registers only with an **active and enabled** CommanderAgent, re-checks every 2 s, and detaches (unregisters, removing the Commander's event handlers) if its Commander is disabled or destroyed.
+- Remaining Commander-side gap (teammate-owned, proposal pending approval): CommanderAgent registers `_initialSquadMembers` in `Awake`, which Unity runs even for a disabled component, and never unregisters in `OnDisable`. A Commander that starts disabled with the Sentinel in that list still issues Investigate orders through events. Workaround in test scenes: deactivate the Commander GameObject, not only the component.
+- SentinelAgent calls `CommanderAgent.ReportInvestigationComplete`, and the test tools use `IssueDirectOrder`. Both exist only in the uncommitted CommanderAgent changes in this working tree, which must be approved and committed by the Commander owner.
 
 ## Orders and reports
 
@@ -42,26 +47,39 @@ Damage is applied once at the attack decision, not by an animation hit event. Do
 | Retreat | Reach fallback and hold; suppress engagement |
 | Investigate / Pursue | Investigate supplied location, search and return; Pursue may engage a visible local target before arrival |
 
-Orders replace prior orders immediately irrespective of numeric priority; Commander owns allocation. Cancel restores the initial home defense center. Disabled agents store orders for re-enable. Dead agents reject orders.
+Orders replace prior orders immediately; the Commander owns allocation. Cancel restores the home defense center. Disabled agents keep orders for re-enable; dead agents reject them. Arrival and block are each reported once per accepted order; target loss once per contact loss; death once (then unregister). CoverRoute keeps TargetCorridorId and navigates to TargetPosition. With several Sentinels the allocator gives distinct tasks (verified with three: Pursue, a secondary task, and a CoverRoute fallback), and a blocked Sentinel waits its retry delay while the others are re-allocated.
 
-Arrival requires physical proximity and reports once per accepted order. Block reports once per accepted order. Target loss reports once per contact loss, with callback replacement orders preserved. Death clears assignment, reports once and unregisters. CoverRoute stores TargetCorridorId but navigates to TargetPosition; Sentinel does not predict escape routes itself. Local chase/investigation endpoints and corners are constrained to the defense sphere. Direct ordered moves may relocate to a new area.
+## Navigation robustness
 
-A single Sentinel does not guarantee Commander will select CoverRoute: its existing allocator prioritizes available high-priority tasks and may choose Pursue. Demonstrate deterministic denial using the fixture's CoverRoute control, then test actual allocation with the full Hunter/Flanker/Sentinel squad and configured corridor markers. Route denial means occupying/defending a route, not magically sealing every exit; the defense radius and corridor width matter.
+The path provider now finds the agent's own position on the NavMesh within 0.75 m (`_startSampleDistance`), while destinations keep the strict 0.1 m tolerance. Previously a Sentinel resting a few centimetres off the eroded NavMesh edge (corner cutting; CharacterController radius equals the agent radius) could never path again. This was reproduced in the Commander Play Mode probe and is now covered by a regression check.
 
 ## Regression inventory
 
-The original twelve checks remain: empty ordered patrol; old chase endpoint repath; target replacement; cancel timers; early Pursue combat; one-shot death/lock; completed-order re-enable; ordered death; Idle re-enable; deferred disabled order; arrival callback replacement; unreachable order reporting.
+13 regression checks: empty ordered patrol; old chase endpoint repath; target replacement; cancel timers; early Pursue combat; one-shot death/lock; completed-order re-enable; ordered death; Idle re-enable; deferred disabled order; arrival callback replacement; unreachable order reporting; off-mesh start recovery.
 
-Six additional integration checks cover: animation/death lock ownership; invalid/valid damage; wall occlusion/cooldown/remembered position; CoverRoute center/leash/cancel; one-shot loss callback replacement; Commander registration/death/removal and blocked-order retry cache.
+15 integration checks: animation/death lock ownership; invalid/valid damage; wall occlusion, cooldown and remembered position; CoverRoute center/leash/cancel; one-shot loss with replacement order; Commander registration/death/blocked retry cache; body bypass; Commander direct orders; Investigate lifecycle; impact-frame damage applied once; impact re-checks and interrupt cancellation (range, wall, facing, damage taken, state change, target replaced, attack ended); dead target ends attack; moving target re-path; disabled-Commander lifecycle; three-Sentinel allocation and blocked retry.
 
-These are synchronous Editor checks using reflection, an in-memory NavMesh and an unsaved scene. They do not simulate full frames, bake the ship or validate visual animation timing. None executed in this session because licensing failed.
+These are synchronous Editor checks (reflection, in-memory NavMesh, unsaved scene). The Play Mode probes above cover real frames.
 
-After activating Unity, close the project Editor and run from the repository root:
+## How to run
+
+Batch mode needs the project closed in the Editor (or run against a copy of Assets/Packages/ProjectSettings):
 
 ```powershell
-& 'C:/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe' -batchmode -nographics -projectPath (Get-Location).Path -executeMethod SentinelRegressionChecks.Run -quit -logFile 'Logs/SentinelRegression-current.log'
+$unity = 'C:/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe'
+& $unity -batchmode -nographics -projectPath (Get-Location).Path -executeMethod SentinelRegressionChecks.Run -quit -logFile 'Logs/SentinelRegression-current.log'
+& $unity -batchmode -projectPath (Get-Location).Path -executeMethod SentinelCommanderPlayModeProbe.Run -logFile 'Logs/SentinelCommanderProbe.log'
+& $unity -batchmode -projectPath (Get-Location).Path -executeMethod SentinelPatrolPlayModeProbe.Run -logFile 'Logs/SentinelPatrolProbe.log'
 ```
 
-Require both `SENTINEL_REGRESSION_PASS: 12 checks passed.` and `SENTINEL_INTEGRATION_PASS: 6 checks passed.`, with no exceptions or compilation errors. The first marker alone is insufficient if an integration check later fails.
+Require `SENTINEL_REGRESSION_PASS: 13 checks passed.`, `SENTINEL_INTEGRATION_PASS: 15 checks passed.`, `PROBE_PASS` from each probe, and no exceptions.
 
-See [Sentinel_Test_Scene.md](Sentinel_Test_Scene.md) for the exact evaluation setup and manual checklist.
+## Known gaps
+
+- `Assets/Prefabs/Sentinel.prefab` is still the primitive version (capsule Body, no robot model, Animator, driver or adapter). The test scene's Sentinel is animated; the prefab is not. Regenerating it needs approval.
+- **Prepare Evaluation Scene and Prefab** is out of date: it looks for a `SentinelVisual` Y Bot child, so on the current scene it would add a second visual and driver, replace the target's collider and save the scene. Do not run it until it is updated.
+- The saved NavMesh (`SentinelNavMesh 1.asset`) was baked while ObstacleWall was active; the wall is inactive in the saved scene, so paths avoid a wall that is not there. Either re-activate the wall or re-bake. `SentinelNavMesh.asset` is an unreferenced earlier bake.
+- Multiple Sentinel prefab instances share the Agent ID `Sentinel_Test` unless each instance is given a unique ID (logs only; references are by object).
+- Ship decks/stairs/doors, the production player weapon/health and game-over flow are outside this fixture.
+
+See [Sentinel_Test_Scene.md](Sentinel_Test_Scene.md) for the evaluation scene and manual checklist.

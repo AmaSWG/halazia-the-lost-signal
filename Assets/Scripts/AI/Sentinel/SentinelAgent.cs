@@ -87,6 +87,12 @@ namespace Halazia.AI.Sentinel
         private float _nextCommanderLookup;
         private float _nextHealthLookup;
         private bool _warnedMissingHealth;
+        // Damage for the current swing waits for the Attack clip's impact event (AnimEvent_AttackHit).
+        private AgentAnimatorDriver _hitWindowSource;
+        private bool _hitPending;
+        private int _pendingHitVersion;
+        private Transform _pendingHitTarget;
+        private UnityEngine.Object _pendingHitHealthObject;
         private Collider _contact;
         private float _contactTime, _bodyRadius = 0.5f;
         private int _bypassAttempts;
@@ -120,6 +126,7 @@ namespace Halazia.AI.Sentinel
         public event Action<ISquadAgent> OnTaskBlocked;
         public event Action<ISquadAgent> OnTargetLost;
         public event Action<ISquadAgent> OnDied;
+        public event Action<ISquadAgent> OnInvestigateComplete;
 
         private void Awake()
         {
@@ -153,11 +160,17 @@ namespace Halazia.AI.Sentinel
         {
             _motor.OnArrived += MotorArrived;
             _motor.OnPathBlocked += MotorBlocked;
+            if (_animation != null && _hitWindowSource == null)
+            {
+                _hitWindowSource = _animation;
+                _hitWindowSource.OnAttackHitWindow += ApplyPendingHit;
+                _hitWindowSource.OnAttackFinished += CancelPendingHit;
+            }
             _nextPerception = 0f;
             if (!IsAlive) { StopNavigation(); SetState(SentinelState.Dead); return; }
-            _commander = FindAnyObjectByType<CommanderAgent>();
+            _commander = FindActiveCommander();
             if (_commander != null) _commander.RegisterSquadMember(this);
-            else Debug.LogWarning($"[SentinelAgent:{_agentId}] No CommanderAgent found in scene.", this);
+            else Debug.LogWarning($"[SentinelAgent:{_agentId}] No active CommanderAgent found in scene.", this);
             if (_hasOrder && (_blockedReported || CurrentTask == SquadTaskType.Idle)) SetState(SentinelState.Idle);
             else if (_hasOrder && !_arrivedReported) BeginOrder();
             else SetState(SentinelState.ReturnToPost);
@@ -165,6 +178,13 @@ namespace Halazia.AI.Sentinel
 
         private void OnDisable()
         {
+            CancelPendingHit();
+            if (_hitWindowSource != null)
+            {
+                _hitWindowSource.OnAttackHitWindow -= ApplyPendingHit;
+                _hitWindowSource.OnAttackFinished -= CancelPendingHit;
+                _hitWindowSource = null;
+            }
             if (_motor != null)
             {
                 _motor.OnArrived -= MotorArrived;
@@ -180,11 +200,18 @@ namespace Halazia.AI.Sentinel
         private void Update()
         {
             if (!IsAlive) return;
-            // Retry at a bounded frequency when a Commander spawns after this agent.
+            // A disabled or destroyed Commander keeps its event subscriptions (its Awake registers the
+            // initial squad even when the component is disabled) and would still issue orders: detach.
+            if (!ReferenceEquals(_commander, null) && (_commander == null || !_commander.isActiveAndEnabled))
+            {
+                _commander.UnregisterSquadMember(this);
+                _commander = null;
+            }
+            // Retry at a bounded frequency when a Commander spawns or is enabled after this agent.
             if (_commander == null && Time.time >= _nextCommanderLookup)
             {
                 _nextCommanderLookup = Time.time + 2f;
-                _commander = FindAnyObjectByType<CommanderAgent>();
+                _commander = FindActiveCommander();
                 if (_commander != null) _commander.RegisterSquadMember(this);
             }
             if (Time.time >= _nextPerception)
@@ -225,7 +252,14 @@ namespace Halazia.AI.Sentinel
                     break;
                 case SentinelState.Search:
                     transform.Rotate(0f, _searchTurnSpeed * Time.deltaTime, 0f);
-                    if (Time.time >= _waitUntil) SetState(SentinelState.ReturnToPost);
+                    if (Time.time >= _waitUntil)
+                    {
+                        SetState(SentinelState.ReturnToPost);
+                        // Arrival only starts the dwell. Report full completion once, and only if
+                        // this investigation is still active and perception has not reacquired the player.
+                        if (_hasOrder && _arrivedReported && CurrentTask == SquadTaskType.Investigate && !_visible && IsAlive)
+                            OnInvestigateComplete?.Invoke(this);
+                    }
                     break;
                 case SentinelState.Chase:
                     // No live-position pursuit through walls.
@@ -313,6 +347,8 @@ namespace Halazia.AI.Sentinel
         {
             if (!IsAlive || damage <= 0f || float.IsNaN(damage) || float.IsInfinity(damage)) return;
             _currentHealth = Mathf.Clamp(_currentHealth - damage, 0f, _maxHealth);
+            // A hit reaction interrupts the swing; its impact event may still fire during the blend-out.
+            CancelPendingHit();
             if (IsAlive) { _combat?.Hit(); return; }
             _orderVersion++;
             _hasOrder = false;
@@ -452,16 +488,61 @@ namespace Halazia.AI.Sentinel
             if (!TargetValid() || !CanSeePlayer(false) || !WithinDefense(_playerTarget.position))
             { SetState(SentinelState.Investigate); return; }
             _motor.SetFaceTarget(_playerTarget);
-            Vector3 direction = _playerTarget.position - Position;
-            direction.y = 0f;
-            if ((_animation != null && _animation.IsAttacking) || Time.time < _nextAttack || Vector3.Angle(transform.forward, direction) > _attackFacingAngle) return;
+            if ((_animation != null && _animation.IsAttacking) || Time.time < _nextAttack || !FacingTarget()) return;
             if (Vector3.Distance(Position, _playerTarget.position) > _attackRange) return;
             _nextAttack = Time.time + _attackCooldown;
             int version = _orderVersion;
+            CancelPendingHit();
             _combat?.Attack();
             if (!IsAlive || !isActiveAndEnabled || version != _orderVersion) return;
-            if (_targetHealthObject != null && _targetHealth != null && _targetHealth.IsAlive)
-                _targetHealth.TakeDamage(_damage);
+            if (_targetHealthObject == null || _targetHealth == null || !_targetHealth.IsAlive) return;
+            if (_hitWindowSource != null && _hitWindowSource.IsAttacking)
+            {
+                // Swing started: damage lands on the clip's impact frame via ApplyPendingHit.
+                _hitPending = true;
+                _pendingHitVersion = version;
+                _pendingHitTarget = _playerTarget;
+                _pendingHitHealthObject = _targetHealthObject;
+                return;
+            }
+            // No animated swing to sync with (no driver/adapter): keep the original immediate hit.
+            _targetHealth.TakeDamage(_damage);
+        }
+
+        private bool FacingTarget()
+        {
+            Vector3 direction = _playerTarget.position - Position;
+            direction.y = 0f;
+            return Vector3.Angle(transform.forward, direction) <= _attackFacingAngle;
+        }
+
+        // Called by AgentAnimatorDriver.OnAttackHitWindow (Attack clip event at the arm's full extension).
+        private void ApplyPendingHit()
+        {
+            if (!_hitPending) return;
+            _hitPending = false; // consume first: at most one damage application per swing
+            string reason =
+                !IsAlive || !isActiveAndEnabled || _state != SentinelState.Attack || _pendingHitVersion != _orderVersion ? "attacker no longer attacking" :
+                !TargetValid() || _targetHealth == null || !_targetHealth.IsAlive ? "target inactive or dead" :
+                _playerTarget != _pendingHitTarget || _targetHealthObject != _pendingHitHealthObject ? "target changed" :
+                Vector3.Distance(Position, _playerTarget.position) > _attackRange ? "target out of range" :
+                !CanSeePlayer(false) ? "line of sight lost" :
+                !FacingTarget() ? "target outside facing angle" : null;
+            _pendingHitTarget = null;
+            _pendingHitHealthObject = null;
+            if (reason != null)
+            {
+                if (_debugLogs) Debug.Log($"[SentinelAgent:{_agentId}] Attack missed at impact: {reason}.", this);
+                return;
+            }
+            _targetHealth.TakeDamage(_damage);
+        }
+
+        private void CancelPendingHit()
+        {
+            _hitPending = false;
+            _pendingHitTarget = null;
+            _pendingHitHealthObject = null;
         }
 
         // Verify arrival against the requested destination, never only the motor's event.
@@ -610,6 +691,7 @@ namespace Halazia.AI.Sentinel
         private void SetState(SentinelState state)
         {
             if (_state == state) return;
+            CancelPendingHit(); // leaving or re-entering Attack interrupts the current swing
             StopNavigation();
             _state = state;
             if (state == SentinelState.Attack || state == SentinelState.Dead) SetMovementLocked(true);
@@ -619,6 +701,12 @@ namespace Halazia.AI.Sentinel
         {
             SetState(SentinelState.Search);
             _waitUntil = Time.time + _searchDuration;
+        }
+        private static CommanderAgent FindActiveCommander()
+        {
+            foreach (var commander in FindObjectsByType<CommanderAgent>(FindObjectsInactive.Exclude))
+                if (commander.isActiveAndEnabled) return commander;
+            return null;
         }
         private bool WithinDefense(Vector3 point) => (point - _post).sqrMagnitude <= _defenseRadius * _defenseRadius;
         private Vector3 ClampToDefense(Vector3 point) => _post + Vector3.ClampMagnitude(point - _post, _defenseRadius);

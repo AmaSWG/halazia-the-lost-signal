@@ -70,6 +70,9 @@ namespace Halazia.Shared.Squad
         /// </summary>
         event Action<ISquadAgent> OnTaskArrived;
 
+        /// <summary>Fired after an Investigate order's search dwell expires without reacquiring the player.</summary>
+        event Action<ISquadAgent> OnInvestigateComplete;
+
         /// <summary>
         /// Fired when the agent's path is blocked and it cannot reach the target.
         /// Commander should assign an alternative order.

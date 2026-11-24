@@ -58,3 +58,6 @@ Desktop.ini
 *.aab
 *.app
 *.unitypackage
+/Artifacts/SentinelRifle/Attachment
+/Artifacts/SentinelRifle/Hold/OptionB_HoldAndStrike
+/Artifacts/SentinelRifle

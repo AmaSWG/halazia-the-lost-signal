@@ -46,11 +46,15 @@ public static class SentinelTestSceneTools
     [MenuItem("Tools/Halazia/Sentinel Test/Verify Baked Paths")]
     public static void VerifyPaths()
     {
+        if (Application.isBatchMode) EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
         if (SceneManager.GetActiveScene().path != ScenePath)
             throw new InvalidOperationException("Open SentinelTestScene first.");
         var provider = GameObject.Find("SentinelTest").GetComponent<SentinelNavMeshPrototype>();
         var names = new List<string> { "SentinelTest", "GuardPosition", "PatrolWaypoint1", "PatrolWaypoint2", "PatrolWaypoint3", "TestPlayerTarget" };
         if (GameObject.Find("SentinelOrderPosition") != null) names.Add("SentinelOrderPosition");
+        // CoverRoute destinations: every active corridor node must be reachable too.
+        foreach (var marker in UnityEngine.Object.FindObjectsByType<Halazia.AI.Commander.CorridorNodeMarker>(FindObjectsInactive.Exclude))
+            names.Add(marker.gameObject.name);
         foreach (string from in names)
             foreach (string to in names)
                 if (from != to && !provider.TryGetPath(GameObject.Find(from).transform.position,
