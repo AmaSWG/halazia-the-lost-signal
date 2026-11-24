@@ -650,7 +650,7 @@ namespace Halazia.AI.Commander
                 //
                 // Guard: _lastKnownPlayerPosition is Vector3.zero on first boot (no prior
                 // contact), so skip Investigate in that case too.
-                if (!_investigationResolved && _lastKnownPlayerPosition != Vector3.zero)
+                if (!_investigationResolved && _lastKnownPlayerPosition.sqrMagnitude > 0.001f)
                 {
                     // Single Investigate order — utility allocator assigns it to the best agent
                     // (typically the Sentinel, whose role affinity for Investigate is 0.6).
