@@ -200,7 +200,9 @@ namespace Halazia.Shared.Movement
             // 4. Translate via CharacterController along calculated movement direction
             // IMPORTANT: Uses _currentMoveDirection so strafing towards a face target moves along the path,
             // and agents turning into a new waypoint don't drift sideways.
-            Vector3 horizontalMove = _currentMoveDirection * (_currentForwardSpeed * deltaTime);
+            // Lock translation even after Stop() clears the path; gravity still applies.
+            Vector3 horizontalMove = _isMovementLocked ? Vector3.zero :
+                _currentMoveDirection * (_currentForwardSpeed * deltaTime);
             Vector3 verticalMove = Vector3.up * (_verticalVelocity * deltaTime);
             _characterController.Move(horizontalMove + verticalMove);
 
