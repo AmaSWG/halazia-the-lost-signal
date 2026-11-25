@@ -66,6 +66,15 @@ public class FlankerShooter : MonoBehaviour
         }
     }
 
+    private void Start()
+    {
+        if (target == null)
+        {
+            GameObject player = GameObject.FindWithTag("Player");
+            if (player != null) target = player.transform;
+        }
+    }
+
     private bool Shooting()
     {
         if (animator == null || !animator.isActiveAndEnabled || animator.runtimeAnimatorController == null)

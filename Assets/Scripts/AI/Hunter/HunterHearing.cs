@@ -85,6 +85,15 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         currentHealth = maxHealth;
     }
 
+    private void Start()
+    {
+        if (playerTransform == null)
+        {
+            GameObject player = GameObject.FindWithTag("Player");
+            if (player != null) playerTransform = player.transform;
+        }
+    }
+
     private void OnEnable()
     {
         motor = GetComponent<IAgentMotor>();
@@ -228,7 +237,9 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         Debug.Log("Hunter: search finished—target lost.");
 
         int versionBeforeReport = actionVersion;
+
         OnTargetLost?.Invoke(this);
+
         OnInvestigateComplete?.Invoke(this);
 
         // A listener may synchronously issue a new order.
