@@ -5,6 +5,8 @@ using UnityEngine.AI;
 using Halazia.Shared.Combat;
 using Halazia.Shared.Movement;
 using Halazia.Shared.Squad;
+using SharedSquadAgent = Halazia.Shared.Squad.ISquadAgent;
+
 
 namespace Halazia.AI.Commander
 {
@@ -17,7 +19,7 @@ namespace Halazia.AI.Commander
     /// </summary>
     [RequireComponent(typeof(AgentMotor))]
     [DisallowMultipleComponent]
-    public class CommanderAgent : MonoBehaviour, ISquadAgent
+    public class CommanderAgent : MonoBehaviour, SharedSquadAgent
     {
         [Header("Tactical Perception")]
         [Tooltip("Direct reference or transform of the player to observe.")]
@@ -75,7 +77,7 @@ namespace Halazia.AI.Commander
         [Header("Sub-Systems")]
         [SerializeField] private CorridorHeatmapTracker _heatmapTracker;
 
-        // ISquadAgent implementation for the Commander itself
+        // SharedSquadAgent implementation for the Commander itself
         public string AgentId => "Commander_01";
         public AgentRole Role => AgentRole.Commander;
         public Vector3 Position => transform.position;
@@ -84,6 +86,11 @@ namespace Halazia.AI.Commander
         public bool IsAlive => _currentHealth > 0.001f;
         public bool IsEngagedWithPlayer => _isPlayerDetected;
         public SquadTaskType CurrentTask => _currentSelfTask;
+        public event Action<SharedSquadAgent> OnTaskArrived;
+        public event Action<SharedSquadAgent> OnTaskBlocked;
+        public event Action<SharedSquadAgent> OnTargetLost;
+        public event Action<SharedSquadAgent> OnDied;
+        public event Action<SharedSquadAgent> OnInvestigateComplete;
 
         [Header("Commander Health & State")]
         [SerializeField] private float _maxHealth = 150f;
@@ -91,7 +98,7 @@ namespace Halazia.AI.Commander
         private SquadTaskType _currentSelfTask = SquadTaskType.Idle;
 
         // Squad tracking
-        private readonly List<ISquadAgent> _registeredSquad = new List<ISquadAgent>();
+        private readonly List<SharedSquadAgent> _registeredSquad = new List<SharedSquadAgent>();
         private SquadUtilityAllocator _utilityAllocator;
         private IAgentMotor _motor;
         private ICombatActions _combatActions;   // Fix 1: resolved at Awake, never AgentAnimatorDriver directly
@@ -101,7 +108,27 @@ namespace Halazia.AI.Commander
         private Vector3 _lastKnownPlayerPosition;
         private float _timeSincePlayerDetected = 999f;
         private float _tickTimer = 0f;
-        private readonly Dictionary<ISquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<ISquadAgent, Vector3>();
+        private readonly Dictionary<SharedSquadAgent, Vector3> _lastDispatchedPositions = new Dictionary<SharedSquadAgent, Vector3>();
+        // Agents executing a direct (scripted/test) order are skipped by automatic reallocation until it ends.
+        private readonly Dictionary<SharedSquadAgent, float> _directOrderUntil = new Dictionary<SharedSquadAgent, float>();
+        // A blocked agent is re-dispatched after a delay, not every frame.
+        private readonly Dictionary<SharedSquadAgent, float> _blockedRetryAfter = new Dictionary<SharedSquadAgent, float>();
+        private const float BlockedRetryDelay = 3f;
+        // False until the player has been observed; (0,0,0) is not a real last-known position.
+        private bool _hasLastKnownPlayerPosition;
+        // True once a squad member has finished searching the current last-known position.
+        // Cleared by the next sighting, so a new contact can still be investigated.
+        private bool _lastKnownPositionInvestigated;
+        // Agents investigating a contact loss, keyed to when that Investigate began. Automatic allocation
+        // leaves them alone until they finish (OnInvestigateComplete), report blocked, die, receive a direct
+        // order, or the player is sighted again after the investigation started.
+        private readonly Dictionary<SharedSquadAgent, float> _investigationStartedAt = new Dictionary<SharedSquadAgent, float>();
+        private float _lastPlayerSightingTime = float.NegativeInfinity;
+
+        private bool IsResolvingInvestigation(SharedSquadAgent agent) =>
+            agent.CurrentTask == SquadTaskType.Investigate &&
+            _investigationStartedAt.TryGetValue(agent, out float startedAt) &&
+            _lastPlayerSightingTime < startedAt; // no sighting since the investigation began
 
         // ── Fix: Investigate order lifecycle tracking ──────────────────────────────
         /// <summary>
@@ -134,7 +161,7 @@ namespace Halazia.AI.Commander
             // Fix 3: Register initial squad and subscribe to their reporting events
             foreach (var mono in _initialSquadMembers)
             {
-                if (mono is ISquadAgent squadAgent)
+                if (mono is SharedSquadAgent squadAgent)
                     RegisterSquadMember(squadAgent);
             }
         }
@@ -288,9 +315,12 @@ namespace Halazia.AI.Commander
         /// Registers a squad member and subscribes to all its reporting events.
         /// Safe to call at runtime (e.g. when a new agent spawns mid-mission).
         /// </summary>
-        public void RegisterSquadMember(ISquadAgent agent)
+        public void RegisterSquadMember(SharedSquadAgent agent)
         {
-            if (agent == null || agent == (ISquadAgent)this || _registeredSquad.Contains(agent)) return;
+            if (agent == null || ReferenceEquals(agent, this) ||
+                _registeredSquad.Contains(agent))
+                return;
+
 
             _registeredSquad.Add(agent);
 
@@ -308,7 +338,7 @@ namespace Halazia.AI.Commander
         /// Unregisters a squad member and unsubscribes from all events.
         /// Call when an agent is destroyed so the Commander holds no dead references.
         /// </summary>
-        public void UnregisterSquadMember(ISquadAgent agent)
+        public void UnregisterSquadMember(SharedSquadAgent agent)
         {
             if (agent == null || !_registeredSquad.Contains(agent)) return;
 
@@ -321,12 +351,15 @@ namespace Halazia.AI.Commander
 
             _registeredSquad.Remove(agent);
             _lastDispatchedPositions.Remove(agent);
+            _directOrderUntil.Remove(agent);
+            _blockedRetryAfter.Remove(agent);
+            _investigationStartedAt.Remove(agent);
             Debug.Log($"[CommanderAgent] Unregistered '{agent.AgentId}'. Squad size: {_registeredSquad.Count}");
         }
 
         // ── Event reactions ──────────────────────────────────────────────────────
 
-        private void OnAgentDied(ISquadAgent agent)
+        private void OnAgentDied(SharedSquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' died. Removing from roster and forcing reallocation.");
             UnregisterSquadMember(agent);
@@ -334,78 +367,65 @@ namespace Halazia.AI.Commander
             _tickTimer = _decisionTickInterval;
         }
 
-        private void OnAgentTaskBlocked(ISquadAgent agent)
+        private void OnAgentTaskBlocked(SharedSquadAgent agent)
         {
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' path blocked on task {agent.CurrentTask}. Forcing reallocation.");
+            // A retry at the same position is still a new order after a path failure.
+            _lastDispatchedPositions.Remove(agent);
+            _directOrderUntil.Remove(agent);
+            _investigationStartedAt.Remove(agent);
+            _blockedRetryAfter[agent] = Time.time + BlockedRetryDelay;
             _tickTimer = _decisionTickInterval;
         }
 
-        /// <summary>
-        /// Fired when the agent reaches the Investigate destination (navigation complete).
-        /// For Investigate orders this is NOT the end of the full cycle — the agent still
-        /// needs to complete its Search dwell. Wait for OnInvestigateComplete instead.
-        /// </summary>
-        private void OnAgentTaskArrived(ISquadAgent agent)
+        private void OnAgentTaskArrived(SharedSquadAgent agent)
         {
             if (agent.CurrentTask == SquadTaskType.Investigate)
             {
-                // The Sentinel has reached the last known player position. It will now begin
-                // its 5-second Search dwell. The Investigate order is still active.
-                // Do NOT release the agent or re-assign here — wait for OnInvestigateComplete.
-                Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' arrived at investigate position. Awaiting Search dwell completion (OnInvestigateComplete).");
+                Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' arrived at investigate position; awaiting Search dwell completion.");
+                return;
             }
-            else
-            {
-                Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' arrived at task destination ({agent.CurrentTask}). Forcing reallocation.");
-                // For non-Investigate tasks (Pursue, Flank, CoverRoute, etc.), re-evaluate assignments
-                _tickTimer = _decisionTickInterval;
-            }
+            Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' arrived at task destination ({agent.CurrentTask}).");
+            _tickTimer = _decisionTickInterval;
         }
 
-        private void OnAgentTargetLost(ISquadAgent agent)
+        private void OnAgentInvestigateComplete(SharedSquadAgent agent)
         {
-            Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' lost sight of target. Switching to Investigate.");
-            // Issue an Investigate order at the last known player position
-            if (_isPlayerDetected)
-            {
-                agent.AssignOrder(new SquadOrder(SquadTaskType.Investigate, _lastKnownPlayerPosition));
-            }
+            if (agent == null || !agent.IsAlive || agent.CurrentTask != SquadTaskType.Investigate) return;
+            Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' completed Investigate. Assigning Patrol.");
+            _lastKnownPositionInvestigated = true;
+            _investigationResolved = true;
+            _lastDispatchedPositions.Remove(agent);
+            _directOrderUntil.Remove(agent);
+            _blockedRetryAfter.Remove(agent);
+            _investigationStartedAt.Remove(agent);
+            agent.AssignOrder(SquadOrder.Patrol(agent.Position));
+            _lastDispatchedPositions[agent] = agent.Position;
+            _tickTimer = _decisionTickInterval;
         }
 
         /// <summary>
-        /// Fix: handles the full Investigate+Search cycle completion.
-        /// Called when an agent fires OnInvestigateComplete after its Search dwell timer expires
-        /// without re-detecting the player.
-        ///
-        /// Actions:
-        ///   1. Mark investigation as resolved so FormulateTacticalOrders stops generating
-        ///      Investigate orders and starts generating Patrol orders.
-        ///   2. Directly issue a Patrol order to the reporting agent so it resumes its route
-        ///      immediately without waiting for the next 0.5 s decision tick.
-        ///   3. Update _lastDispatchedPositions so the deduplication guard does not
-        ///      block the Patrol dispatch on the next tick.
-        ///   4. Accelerate the next tick so the allocation cycle reflects the resolved state.
+        /// Called by a squad member when it has finished the search that follows an Investigate arrival.
+        /// OnTaskArrived only means the destination was reached; this ends the Investigate order,
+        /// releases the agent to its own routine (e.g. Sentinel patrol), and stops automatic allocation
+        /// from re-issuing Investigate at the same position until the player is sighted again.
         /// </summary>
-        private void OnAgentInvestigateComplete(ISquadAgent agent)
+        public void ReportInvestigationComplete(SharedSquadAgent agent)
         {
-            Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' completed full Investigate+Search cycle. No player contact. Releasing to Patrol.");
+            OnAgentInvestigateComplete(agent);
+        }
 
-            // 1. Mark this episode's investigation as resolved.
-            //    FormulateTacticalOrders will now generate Patrol instead of Investigate.
-            _investigationResolved = true;
-
-            // 2. Issue Patrol immediately — do not wait for the next tick.
-            //    Pass the agent's current world position so the allocator deduplication
-            //    guard recognises this as a new order on the next cycle.
-            var patrolOrder = SquadOrder.Patrol(agent.Position);
-            agent.AssignOrder(patrolOrder);
-
-            // 3. Record the dispatched Patrol position so the Commander does not
-            //    re-issue the same order repeatedly on subsequent ticks.
-            _lastDispatchedPositions[agent] = agent.Position;
-
-            // 4. Accelerate the next decision cycle to pick up the resolved state.
-            _tickTimer = _decisionTickInterval;
+        private void OnAgentTargetLost(SharedSquadAgent agent)
+        {
+            Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' lost sight of target. Switching to Investigate.");
+            // Issue an Investigate order at the last known player position
+            if (_isPlayerDetected && !HasDirectOrder(agent))
+            {
+                agent.AssignOrder(new SquadOrder(SquadTaskType.Investigate, _lastKnownPlayerPosition));
+                // Protect this investigation from automatic reallocation (e.g. Pursue during the combat
+                // window) until it completes or the player is sighted again.
+                if (agent.CurrentTask == SquadTaskType.Investigate) _investigationStartedAt[agent] = Time.time;
+            }
         }
 
         #endregion
@@ -424,12 +444,12 @@ namespace Halazia.AI.Commander
             List<SquadOrder> orders = FormulateTacticalOrders();
 
             // 4. Filter only currently active and alive squad members (non-destructive)
-            var activeSquad = new List<ISquadAgent>();
+            var activeSquad = new List<SharedSquadAgent>();
             foreach (var agent in _registeredSquad)
             {
                 if (agent != null && agent.IsAlive)
                 {
-                    if (agent is MonoBehaviour mb && mb != null && mb.gameObject.activeInHierarchy)
+                    if (agent is MonoBehaviour mb && mb != null && mb.isActiveAndEnabled)
                     {
                         activeSquad.Add(agent);
                     }
@@ -442,8 +462,21 @@ namespace Halazia.AI.Commander
 
                 foreach (var pair in assignments)
                 {
-                    ISquadAgent agent = pair.Key;
+                    SharedSquadAgent agent = pair.Key;
                     SquadOrder order = pair.Value;
+                    if (_directOrderUntil.TryGetValue(agent, out float holdUntil))
+                    {
+                        if (Time.time < holdUntil) continue;
+                        _directOrderUntil.Remove(agent);
+                    }
+                    if (_blockedRetryAfter.TryGetValue(agent, out float retryAt))
+                    {
+                        if (Time.time < retryAt) continue;
+                        _blockedRetryAfter.Remove(agent);
+                    }
+                    // An unresolved contact-loss investigation is not replaced (e.g. by Pursue while the
+                    // combat window is still open) or restarted; a new sighting lifts this.
+                    if (IsResolvingInvestigation(agent)) continue;
 
                     bool taskChanged = agent.CurrentTask != order.TaskType;
                     bool targetMoved = !_lastDispatchedPositions.TryGetValue(agent, out Vector3 lastPos)
@@ -469,7 +502,7 @@ namespace Halazia.AI.Commander
                 var found = FindObjectsOfType<MonoBehaviour>();
                 foreach (var mb in found)
                 {
-                    if (mb is ISquadAgent squadAgent && (MonoBehaviour)squadAgent != this)
+                    if (mb.isActiveAndEnabled && mb is SharedSquadAgent squadAgent && squadAgent.IsAlive && (MonoBehaviour)squadAgent != this)
                     {
                         RegisterSquadMember(squadAgent);
                     }
@@ -487,6 +520,9 @@ namespace Halazia.AI.Commander
         public void ReportPlayerSighted(Vector3 playerPosition)
         {
             _lastKnownPlayerPosition = playerPosition;
+            _lastPlayerSightingTime = Time.time;
+            _hasLastKnownPlayerPosition = true;
+            _lastKnownPositionInvestigated = false;
             _timeSincePlayerDetected = 0f;
             _isPlayerDetected = true;
 
@@ -582,7 +618,9 @@ namespace Halazia.AI.Commander
         {
             var orders = new List<SquadOrder>();
 
-            if (_isPlayerDetected)
+            // A last-known position that has already been searched without contact is not pursued again
+            // during the rest of the combat window; the next sighting clears _lastKnownPositionInvestigated.
+            if (_isPlayerDetected && !_lastKnownPositionInvestigated)
             {
                 // Order A: Direct frontal pursuit (Top priority, direct combat pressure)
                 orders.Add(new SquadOrder(SquadTaskType.Pursue, _lastKnownPlayerPosition, priority: 1.0f));
@@ -641,28 +679,15 @@ namespace Halazia.AI.Commander
                     }
                 }
             }
-            else
+            else if (_hasLastKnownPlayerPosition && !_lastKnownPositionInvestigated)
             {
-                // ── Fix: Investigate order lifecycle ──────────────────────────────────
-                // Only issue Investigate while the last known position has not yet been
-                // searched. Once OnInvestigateComplete fires, _investigationResolved = true
-                // and this branch switches to Patrol so agents resume their normal routes.
-                //
-                // Guard: _lastKnownPlayerPosition is Vector3.zero on first boot (no prior
-                // contact), so skip Investigate in that case too.
-                if (!_investigationResolved && _lastKnownPlayerPosition.sqrMagnitude > 0.001f)
-                {
-                    // Single Investigate order — utility allocator assigns it to the best agent
-                    // (typically the Sentinel, whose role affinity for Investigate is 0.6).
-                    orders.Add(new SquadOrder(SquadTaskType.Investigate, _lastKnownPlayerPosition, priority: 0.8f));
-                }
-                else
-                {
-                    // Investigation resolved (or no prior combat) — restore squad to Patrol.
-                    // Vector3.zero as position: agents use their own internal waypoint loops.
-                    orders.Add(new SquadOrder(SquadTaskType.Patrol, Vector3.zero, priority: 0.3f));
-                }
+                // In search mode: investigate last known disturbance (never before any sighting,
+                // and not again once it has been searched)
+                orders.Add(new SquadOrder(SquadTaskType.Investigate, _lastKnownPlayerPosition, priority: 0.8f));
             }
+
+            if (orders.Count == 0 && (!_hasLastKnownPlayerPosition || _lastKnownPositionInvestigated))
+                orders.Add(SquadOrder.Patrol(Vector3.zero));
 
             return orders;
         }
@@ -769,13 +794,44 @@ namespace Halazia.AI.Commander
 
         #endregion
 
-        #region ISquadAgent Interface Methods
+        #region Direct Orders
 
-        public event Action<ISquadAgent> OnTaskArrived;
-        public event Action<ISquadAgent> OnTaskBlocked;
-        public event Action<ISquadAgent> OnTargetLost;
-        public event Action<ISquadAgent> OnDied;
-        public event Action<ISquadAgent> OnInvestigateComplete;   // Fix: Commander also implements the new contract
+        /// <summary>
+        /// Dispatches a specific order to a registered squad member (scripted events, test harnesses),
+        /// e.g. CoverRoute or HoldPosition, which automatic allocation does not give a lone agent.
+        /// Automatic reallocation skips that agent for holdSeconds, or until it reports blocked/died
+        /// or ReleaseDirectOrder is called.
+        /// </summary>
+        public bool IssueDirectOrder(SharedSquadAgent agent, SquadOrder order, float holdSeconds = 30f)
+        {
+            if (agent == null || !agent.IsAlive || !_registeredSquad.Contains(agent)) return false;
+            _directOrderUntil[agent] = Time.time + Mathf.Max(0f, holdSeconds);
+            _blockedRetryAfter.Remove(agent);
+            _investigationStartedAt.Remove(agent);
+            _lastDispatchedPositions[agent] = order.TargetPosition;
+            Debug.Log($"[CommanderAgent] Direct order {order} to agent {agent.AgentId} ({agent.Role}); " +
+                      $"automatic reallocation paused for {holdSeconds:F0}s.");
+            agent.AssignOrder(order);
+            return true;
+        }
+
+        /// <summary>Returns an agent to automatic allocation on the next decision tick.</summary>
+        public void ReleaseDirectOrder(SharedSquadAgent agent)
+        {
+            if (agent != null && _directOrderUntil.Remove(agent))
+            {
+                _lastDispatchedPositions.Remove(agent);
+                _tickTimer = _decisionTickInterval;
+                Debug.Log($"[CommanderAgent] '{agent.AgentId}' released to automatic allocation.");
+            }
+        }
+
+        public bool HasDirectOrder(SharedSquadAgent agent) =>
+            agent != null && _directOrderUntil.TryGetValue(agent, out float until) && Time.time < until;
+
+        #endregion
+
+        #region SharedSquadAgent Interface Methods
 
         public void AssignOrder(SquadOrder order)
         {

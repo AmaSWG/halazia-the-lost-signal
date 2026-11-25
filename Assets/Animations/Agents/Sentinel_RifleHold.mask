@@ -1,0 +1,91 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!319 &31900000
+AvatarMask:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Sentinel_RifleHold
+  m_Mask: 01000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000u
+  m_Elements:
+  - m_Path: 
+    m_Weight: 0
+  - m_Path: Sentinel_Chest
+    m_Weight: 0
+  - m_Path: Sentinel_Head
+    m_Weight: 0
+  - m_Path: Sentinel_Hips
+    m_Weight: 0
+  - m_Path: Sentinel_LeftFoot
+    m_Weight: 0
+  - m_Path: Sentinel_LeftHand
+    m_Weight: 0
+  - m_Path: Sentinel_LeftLowerArm
+    m_Weight: 0
+  - m_Path: Sentinel_LeftLowerLeg
+    m_Weight: 0
+  - m_Path: Sentinel_LeftUpperArm
+    m_Weight: 0
+  - m_Path: Sentinel_LeftUpperLeg
+    m_Weight: 0
+  - m_Path: Sentinel_Neck
+    m_Weight: 0
+  - m_Path: Sentinel_Rig
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/LeftUpperLeg
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/LeftUpperLeg/LeftLowerLeg
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/LeftUpperLeg/LeftLowerLeg/LeftFoot
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/LeftUpperLeg/LeftLowerLeg/LeftFoot/LeftToes
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/RightUpperLeg
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/RightUpperLeg/RightLowerLeg
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/RightUpperLeg/RightLowerLeg/RightFoot
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/RightUpperLeg/RightLowerLeg/RightFoot/RightToes
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/Spine
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/LeftShoulder
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/LeftShoulder/LeftUpperArm
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/LeftShoulder/LeftUpperArm/LeftLowerArm
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/LeftShoulder/LeftUpperArm/LeftLowerArm/LeftHand
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/Neck
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/Neck/Head
+    m_Weight: 0
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/RightShoulder
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/RightShoulder/RightUpperArm
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/RightShoulder/RightUpperArm/RightLowerArm
+    m_Weight: 1
+  - m_Path: Sentinel_Rig/Hips/Spine/Chest/RightShoulder/RightUpperArm/RightLowerArm/RightHand
+    m_Weight: 1
+  - m_Path: Sentinel_RightFoot
+    m_Weight: 0
+  - m_Path: Sentinel_RightHand
+    m_Weight: 0
+  - m_Path: Sentinel_RightLowerArm
+    m_Weight: 0
+  - m_Path: Sentinel_RightLowerLeg
+    m_Weight: 0
+  - m_Path: Sentinel_RightUpperArm
+    m_Weight: 0
+  - m_Path: Sentinel_RightUpperLeg
+    m_Weight: 0
+  - m_Path: Sentinel_Spine
+    m_Weight: 0

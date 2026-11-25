@@ -69,6 +69,18 @@ namespace Halazia.Shared.Movement
         private Animator _animator;
         private IAgentMotor _motor;
         private Coroutine _attackLockCoroutine;
+        private bool _dead, _externalMovementLock;
+        public bool IsAttacking { get; private set; }
+
+        // Decision/lifecycle locks must survive a late animation completion event.
+        public void SetExternalMovementLock(bool locked)
+        {
+            _externalMovementLock = locked;
+            ApplyMovementLock();
+        }
+
+        private void ApplyMovementLock() =>
+            _motor?.SetMovementLocked(_dead || _externalMovementLock || (IsAttacking && _lockMovementOnAttack));
 
         // Cached parameter hashes (avoids string allocation & lookup per frame - vital for SE3032 optimization marks)
         private int _speedParamHash;
@@ -180,10 +192,11 @@ namespace Halazia.Shared.Movement
         /// <param name="attackType">Index selecting specific attack variation (0=Light Melee, 1=Heavy Slash, 2=Shot).</param>
         public void TriggerAttack(int attackType = 0)
         {
+            if (_dead || IsAttacking || !isActiveAndEnabled) return;
             if (_animator == null)
                 _animator = GetComponent<Animator>() ?? GetComponentInChildren<Animator>();
-
             if (_animator == null) return;
+            IsAttacking = true;
 
             if (!_hasAttackTrigger && _animator.runtimeAnimatorController != null)
             {
@@ -205,9 +218,9 @@ namespace Halazia.Shared.Movement
                 try { _animator.SetTrigger(_attackTriggerName); } catch {}
             }
 
-            if (_lockMovementOnAttack && _motor != null)
+            if (_motor != null)
             {
-                _motor.SetMovementLocked(true);
+                ApplyMovementLock();
 
                 if (_attackLockCoroutine != null)
                 {
@@ -222,6 +235,7 @@ namespace Halazia.Shared.Movement
         /// </summary>
         public void TriggerHit()
         {
+            if (_dead) return;
             if (_hasHitTrigger)
             {
                 _animator.SetTrigger(_hitTriggerHash);
@@ -233,6 +247,13 @@ namespace Halazia.Shared.Movement
         /// </summary>
         public void TriggerDie()
         {
+            if (_dead) return;
+            _dead = true;
+            IsAttacking = false;
+            if (_attackLockCoroutine != null) StopCoroutine(_attackLockCoroutine);
+            _attackLockCoroutine = null;
+            if (_hasAttackTrigger) _animator.ResetTrigger(_attackTriggerHash);
+            if (_hasHitTrigger) _animator.ResetTrigger(_hitTriggerHash);
             if (_hasIsDeadParam)
             {
                 _animator.SetBool(_isDeadParamHash, true);
@@ -253,16 +274,15 @@ namespace Halazia.Shared.Movement
 
         private void CompleteAttack()
         {
+            if (!IsAttacking || _dead) return;
+            IsAttacking = false;
             if (_attackLockCoroutine != null)
             {
                 StopCoroutine(_attackLockCoroutine);
                 _attackLockCoroutine = null;
             }
 
-            if (_motor != null)
-            {
-                _motor.SetMovementLocked(false);
-            }
+            ApplyMovementLock();
 
             OnAttackFinished?.Invoke();
         }
@@ -277,7 +297,15 @@ namespace Halazia.Shared.Movement
         /// </summary>
         public void AnimEvent_AttackHit()
         {
-            OnAttackHitWindow?.Invoke();
+            if (IsAttacking && !_dead) OnAttackHitWindow?.Invoke();
+        }
+
+        private void OnDisable()
+        {
+            if (_attackLockCoroutine != null) StopCoroutine(_attackLockCoroutine);
+            _attackLockCoroutine = null;
+            IsAttacking = false;
+            ApplyMovementLock();
         }
 
         /// <summary>

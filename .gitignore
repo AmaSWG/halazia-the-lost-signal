@@ -54,6 +54,12 @@ Desktop.ini
 
 *.unitypackage
 
+*.apk
+*.aab
+*.app
+*.unitypackage
+/Artifacts/SentinelRifle/
+
 # User & temporary backups
 .vsconfig
 *.blend1
