@@ -173,6 +173,26 @@ public class FlankerAgent : MonoBehaviour, ISquadAgent
             return;
         }
 
+        // A ranged pursuer stops when a valid shot is available instead of
+        // trying to reach the centre of the player's blocking collider.
+        if (CurrentTask == SquadTaskType.Pursue)
+        {
+            FlankerShooter shooter = GetComponent<FlankerShooter>();
+            if (visible && shooter != null && shooter.CanEngageTarget(player))
+            {
+                motor.Stop();
+                motor.SetFaceTarget(player);
+                hasDestination = false;
+                arrived = false;
+                return;
+            }
+
+            // Follow a visible player; otherwise retain the last ordered position.
+            arrived = false;
+            MoveTo(visible && player != null ? player.position : order.TargetPosition);
+            return;
+        }
+
         if (arrived) return;
 
         Vector3 target = order.TargetPosition;

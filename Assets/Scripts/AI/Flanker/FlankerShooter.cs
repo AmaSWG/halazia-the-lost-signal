@@ -106,7 +106,7 @@ public class FlankerShooter : MonoBehaviour
             brain.CurrentTask != SquadTaskType.Pursue
                 ? $"Waiting for a combat order; current task is {brain.CurrentTask}" :
             motor.IsMovementLocked ? "Movement is locked" :
-            motor.IsMoving ? "Moving to flank position" : null;
+            motor.IsMoving ? "Moving to combat position" : null;
         if (blocked != null)
         {
             SetAutomaticStatus(blocked);
@@ -148,6 +148,12 @@ public class FlankerShooter : MonoBehaviour
         if (automaticFireStatus == value) return;
         automaticFireStatus = value;
         if (debugShots) Debug.Log($"[Flanker auto] {value}", this);
+    }
+
+    public bool CanEngageTarget(Transform candidate)
+    {
+        return isActiveAndEnabled && candidate != null && candidate == target &&
+            TryGetAim(out _, out _);
     }
 
     private bool TryGetAim(out Vector3 aimPoint, out DamageReceiver receiver)
