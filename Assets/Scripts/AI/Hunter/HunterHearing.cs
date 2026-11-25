@@ -85,6 +85,15 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
         currentHealth = maxHealth;
     }
 
+    private void Start()
+    {
+        if (playerTransform == null)
+        {
+            GameObject player = GameObject.FindWithTag("Player");
+            if (player != null) playerTransform = player.transform;
+        }
+    }
+
     private void OnEnable()
     {
         motor = GetComponent<IAgentMotor>();

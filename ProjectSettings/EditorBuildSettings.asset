@@ -6,9 +6,15 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
+    path: Assets/Scenes/Halazia_Opening.unity
+    guid: b99fdc3c91ca03e46a39cc9c4cf61266
+  - enabled: 1
     path: Assets/Scenes/Flanker_Test.unity
     guid: 1aa6bea95a8e7b94e825e1ea10f378bc
   - enabled: 1
     path: Assets/Scenes/Cargo_Blockout.unity
     guid: 8cb4889936710e04187e7ea2e1c5958a
+  - enabled: 1
+    path: Assets/Scenes/halazia_Ship_World.unity
+    guid: 62f9f5d31e4971842a1d82c86bf5243b
   m_configObjects: {}
