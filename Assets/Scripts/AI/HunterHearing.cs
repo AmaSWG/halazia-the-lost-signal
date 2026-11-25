@@ -1,8 +1,10 @@
 using UnityEngine;
 using UnityEngine.AI;
 
-[RequireComponent(typeof(NavMeshAgent))]
-public class HunterHearing : MonoBehaviour
+namespace Halazia.Legacy
+{
+    [RequireComponent(typeof(NavMeshAgent))]
+    public class HunterHearing : MonoBehaviour
 {
     public enum HunterState
     {
@@ -119,4 +121,4 @@ public class HunterHearing : MonoBehaviour
 
         return distance <= agent.stoppingDistance + 0.2f;
     }
-}
+}}

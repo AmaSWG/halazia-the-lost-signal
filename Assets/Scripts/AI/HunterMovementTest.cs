@@ -1,10 +1,13 @@
 using UnityEngine;
 using UnityEngine.AI;
 
-[RequireComponent(typeof(NavMeshAgent))]
-public class HunterMovementTest : MonoBehaviour
+
+namespace Halazia.Legacy
 {
-    public Transform target;
+    [RequireComponent(typeof(NavMeshAgent))]
+    public class HunterMovementTest : MonoBehaviour
+    {
+        public Transform target;
 
     void Start()
     {
@@ -44,4 +47,4 @@ public class HunterMovementTest : MonoBehaviour
             Debug.LogWarning("Target is too far from the NavMesh.");
         }
     }
-}
+}}
