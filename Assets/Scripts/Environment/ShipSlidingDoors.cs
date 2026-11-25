@@ -11,6 +11,11 @@ public class ShipSlidingDoor : MonoBehaviour
     [SerializeField] private Vector3 openOffset = new Vector3(3.1f, 0f, 0f);
     [SerializeField, Min(0.1f)] private float speed = 2f;
 
+    [Header("Door Sounds")]
+    [SerializeField] private AudioSource audioSource;
+    [SerializeField] private AudioClip openSound;
+    [SerializeField] private AudioClip closeSound;
+
     [Header("Interaction")]
     [Tooltip("Assign the player root. If empty, uses Main Camera for testing.")]
     [SerializeField] private Transform interactor;
@@ -122,9 +127,31 @@ public class ShipSlidingDoor : MonoBehaviour
     public void Toggle()
     {
         if (Application.isPlaying)
-            isOpen = !isOpen;
+            SetDoorState(!isOpen);
     }
 
-    public void Open() => isOpen = true;
-    public void Close() => isOpen = false;
+    public void Open() => SetDoorState(true);
+
+    public void Close() => SetDoorState(false);
+
+    private void SetDoorState(bool open)
+    {
+        if (isOpen == open)
+            return;
+
+        isOpen = open;
+        PlayDoorSound(open);
+    }
+
+    //door sound
+    private void PlayDoorSound(bool opening)
+    {
+        if (audioSource == null)
+            return;
+
+        AudioClip clip = opening ? openSound : closeSound;
+
+        if (clip != null)
+            audioSource.PlayOneShot(clip);
+    }
 }
