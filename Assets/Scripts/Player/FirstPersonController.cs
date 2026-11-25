@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+
 [RequireComponent(typeof(CharacterController))]
 public class FirstPersonController : MonoBehaviour
 {
@@ -9,6 +10,13 @@ public class FirstPersonController : MonoBehaviour
     [SerializeField] private float mouseSensitivity = 0.1f;
     [SerializeField] private float gravity = -20f;
 
+    [Header("Running and Footsteps")]
+    [SerializeField] private float runSpeed = 7f;
+    [SerializeField] private float runningFootstepInterval = 0.45f;
+
+    private SoundEmitter soundEmitter;
+    private float footstepTimer;
+
     private CharacterController controller;
     private float verticalSpeed;
     private float cameraPitch;
@@ -16,6 +24,7 @@ public class FirstPersonController : MonoBehaviour
     private void Awake()
     {
         controller = GetComponent<CharacterController>();
+        soundEmitter = GetComponent<SoundEmitter>();
 
         if (playerCamera == null)
         {
@@ -72,7 +81,11 @@ public class FirstPersonController : MonoBehaviour
             transform.right * input.x +
             transform.forward * input.y;
 
-        movement *= moveSpeed;
+        bool isRunning =
+        keyboard.leftShiftKey.isPressed &&
+        input.sqrMagnitude > 0.01f;
+
+        movement *= isRunning ? runSpeed : moveSpeed;
 
         // Apply gravity.
         if (controller.isGrounded && verticalSpeed < 0f)
@@ -81,8 +94,33 @@ public class FirstPersonController : MonoBehaviour
         verticalSpeed += gravity * Time.deltaTime;
         movement.y = verticalSpeed;
 
-        // Move while respecting collisions.
+        // Measure actual movement so pushing against a wall
+        // does not generate running footsteps.
+        Vector3 positionBeforeMove = transform.position;
+
         controller.Move(movement * Time.deltaTime);
+
+        Vector3 displacement = transform.position - positionBeforeMove;
+        displacement.y = 0f;
+
+        float actualSpeed = Time.deltaTime > 0f
+            ? displacement.magnitude / Time.deltaTime
+            : 0f;
+
+        if (isRunning && controller.isGrounded && actualSpeed > 0.5f)
+        {
+            footstepTimer += Time.deltaTime;
+
+            if (footstepTimer >= runningFootstepInterval)
+            {
+                footstepTimer = 0f;
+                soundEmitter?.EmitRunningFootstep();
+            }
+        }
+        else
+        {
+            footstepTimer = 0f;
+        }
     }
 
     private void SetCursorLocked(bool locked)
