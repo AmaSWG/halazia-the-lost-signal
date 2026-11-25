@@ -18,12 +18,14 @@ public class FirstPersonController : MonoBehaviour
     private float footstepTimer;
 
     private CharacterController controller;
+    private Animator animator;
     private float verticalSpeed;
     private float cameraPitch;
 
     private void Awake()
     {
         controller = GetComponent<CharacterController>();
+        animator = GetComponentInChildren<Animator>();
         soundEmitter = GetComponent<SoundEmitter>();
 
         if (playerCamera == null)
@@ -76,6 +78,7 @@ public class FirstPersonController : MonoBehaviour
 
         // Keep diagonal movement at the same speed.
         input = Vector2.ClampMagnitude(input, 1f);
+        animator?.SetFloat("Speed", input.magnitude);
 
         Vector3 movement =
             transform.right * input.x +
