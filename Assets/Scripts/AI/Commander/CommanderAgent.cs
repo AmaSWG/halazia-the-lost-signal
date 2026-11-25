@@ -49,10 +49,10 @@ namespace Halazia.AI.Commander
 
         [Header("Self-Defense & Combat")]
         [Tooltip("Distance at which Commander executes a defensive melee strike (highest priority, ≤ close-quarters range).")]
-        [SerializeField] private float _meleeAttackDistance = 2.5f;
+        [SerializeField] private float _meleeAttackDistance = 3.2f;
 
         [Tooltip("Distance below which Commander halts movement and enters close-quarters defense. Melee fires when cooldown allows.")]
-        [SerializeField] private float _closeQuartersDistance = 2.8f;
+        [SerializeField] private float _closeQuartersDistance = 3.5f;
 
         [Tooltip("Distance below which Commander begins active tactical retreat away from the player.")]
         [SerializeField] private float _retreatTriggerDistance = 8.0f;
@@ -130,6 +130,17 @@ namespace Halazia.AI.Commander
             _investigationStartedAt.TryGetValue(agent, out float startedAt) &&
             _lastPlayerSightingTime < startedAt; // no sighting since the investigation began
 
+        // ── Fix: Investigate order lifecycle tracking ──────────────────────────────
+        /// <summary>
+        /// True when the current combat episode's investigation has been fully resolved
+        /// (i.e. a squad agent fired OnInvestigateComplete).
+        /// Reset to false each time a new player sighting is registered so the next
+        /// post-combat phase can trigger a fresh Investigate order.
+        /// Starts as true so the Commander does not issue Investigate orders before any
+        /// player contact has ever occurred.
+        /// </summary>
+        private bool _investigationResolved = true;
+
         private void Awake()
         {
             _currentHealth = _maxHealth;
@@ -179,7 +190,7 @@ namespace Halazia.AI.Commander
                 if (_timeSincePlayerDetected >= _combatWindowSeconds)
                 {
                     _isPlayerDetected = false;
-                    Debug.Log($"[CommanderAgent] Combat window expired ({_combatWindowSeconds:F1}s without sighting). Squad transitioning to patrol/search.");
+                    Debug.Log($"[CommanderAgent] Combat window expired ({_combatWindowSeconds:F1}s without sighting). Squad transitioning to investigate/patrol.");
                 }
             }
 
@@ -281,8 +292,21 @@ namespace Halazia.AI.Commander
         {
             Debug.Log($"[CommanderAgent] ⚔️ Player in close quarters ({Vector3.Distance(transform.position, _playerTransform.position):F1}m)! Commander executes tactical defense strike!");
 
-            // Fix 1: Uses ICombatActions — no reference to AgentAnimatorDriver
-            _combatActions?.Attack();
+            if (_combatActions == null)
+            {
+                _combatActions = GetComponent<ICombatActions>() ?? GetComponentInChildren<ICombatActions>();
+            }
+
+            if (_combatActions != null)
+            {
+                _combatActions.Attack();
+            }
+            else
+            {
+                // Fallback: drive attack directly through AgentAnimatorDriver
+                var driver = GetComponent<AgentAnimatorDriver>() ?? GetComponentInChildren<AgentAnimatorDriver>();
+                driver?.PlayAttack();
+            }
         }
 
         #region Squad Registry Management
@@ -301,11 +325,11 @@ namespace Halazia.AI.Commander
             _registeredSquad.Add(agent);
 
             // Fix 3: Subscribe to reporting events so Commander reacts rather than polling
-            agent.OnDied        += OnAgentDied;
-            agent.OnTaskBlocked += OnAgentTaskBlocked;
-            agent.OnTaskArrived += OnAgentTaskArrived;
-            agent.OnTargetLost  += OnAgentTargetLost;
-            agent.OnInvestigateComplete += OnAgentInvestigateComplete;
+            agent.OnDied               += OnAgentDied;
+            agent.OnTaskBlocked        += OnAgentTaskBlocked;
+            agent.OnTaskArrived        += OnAgentTaskArrived;
+            agent.OnTargetLost         += OnAgentTargetLost;
+            agent.OnInvestigateComplete += OnAgentInvestigateComplete;   // Fix: new lifecycle event
 
             Debug.Log($"[CommanderAgent] Registered '{agent.AgentId}' ({agent.Role}). Squad size: {_registeredSquad.Count}");
         }
@@ -319,11 +343,11 @@ namespace Halazia.AI.Commander
             if (agent == null || !_registeredSquad.Contains(agent)) return;
 
             // Unsubscribe before removing to prevent dangling event handlers
-            agent.OnDied        -= OnAgentDied;
-            agent.OnTaskBlocked -= OnAgentTaskBlocked;
-            agent.OnTaskArrived -= OnAgentTaskArrived;
-            agent.OnTargetLost  -= OnAgentTargetLost;
-            agent.OnInvestigateComplete -= OnAgentInvestigateComplete;
+            agent.OnDied               -= OnAgentDied;
+            agent.OnTaskBlocked        -= OnAgentTaskBlocked;
+            agent.OnTaskArrived        -= OnAgentTaskArrived;
+            agent.OnTargetLost         -= OnAgentTargetLost;
+            agent.OnInvestigateComplete -= OnAgentInvestigateComplete;   // Fix: unsubscribe new event
 
             _registeredSquad.Remove(agent);
             _lastDispatchedPositions.Remove(agent);
@@ -370,6 +394,7 @@ namespace Halazia.AI.Commander
             if (agent == null || !agent.IsAlive || agent.CurrentTask != SquadTaskType.Investigate) return;
             Debug.Log($"[CommanderAgent] Agent '{agent.AgentId}' completed Investigate. Assigning Patrol.");
             _lastKnownPositionInvestigated = true;
+            _investigationResolved = true;
             _lastDispatchedPositions.Remove(agent);
             _directOrderUntil.Remove(agent);
             _blockedRetryAfter.Remove(agent);
@@ -454,7 +479,7 @@ namespace Halazia.AI.Commander
                     if (IsResolvingInvestigation(agent)) continue;
 
                     bool taskChanged = agent.CurrentTask != order.TaskType;
-                    bool targetMoved = !_lastDispatchedPositions.TryGetValue(agent, out Vector3 lastPos) 
+                    bool targetMoved = !_lastDispatchedPositions.TryGetValue(agent, out Vector3 lastPos)
                                        || Vector3.Distance(lastPos, order.TargetPosition) > 0.75f;
 
                     if (taskChanged || targetMoved)
@@ -488,6 +513,9 @@ namespace Halazia.AI.Commander
         /// <summary>
         /// Called by squad members (Hunter, Flanker, Sentinel) or perception sensors when the player is detected.
         /// Preserves architectural decoupling: Commander updates last known coordinates without wallhacking.
+        ///
+        /// Fix: also resets _investigationResolved so the next post-combat phase triggers a fresh
+        /// Investigate order rather than immediately going to Patrol.
         /// </summary>
         public void ReportPlayerSighted(Vector3 playerPosition)
         {
@@ -497,6 +525,10 @@ namespace Halazia.AI.Commander
             _lastKnownPositionInvestigated = false;
             _timeSincePlayerDetected = 0f;
             _isPlayerDetected = true;
+
+            // Fix: a new sighting means a new combat episode. The previous investigation
+            // (if any) is no longer valid — reset so post-combat Investigate runs again.
+            _investigationResolved = false;
 
             // Feed player location into the Markovian corridor heatmap
             if (_heatmapTracker != null)
@@ -574,10 +606,13 @@ namespace Halazia.AI.Commander
 
         /// <summary>
         /// Generates the menu of active tactical orders needed right now.
-        /// Distinct tasks are generated to guarantee diversity:
-        /// 1. Pursue (Frontal assault)
-        /// 2. Flank (Side angle approach)
-        /// 3. CoverRoute (Preempt predicted escape choke point)
+        ///
+        /// Fix: the non-combat (else) branch no longer issues Investigate orders indefinitely.
+        ///   • When !_investigationResolved: a single Investigate order is generated so the
+        ///     most appropriate agent searches the last known player position.
+        ///   • When _investigationResolved: a Patrol order is generated so agents resume normal
+        ///     routes. This prevents the Sentinel from being perpetually locked onto a stale
+        ///     Investigate position after the Search behaviour completes.
         /// </summary>
         private List<SquadOrder> FormulateTacticalOrders()
         {
@@ -650,6 +685,9 @@ namespace Halazia.AI.Commander
                 // and not again once it has been searched)
                 orders.Add(new SquadOrder(SquadTaskType.Investigate, _lastKnownPlayerPosition, priority: 0.8f));
             }
+
+            if (orders.Count == 0 && (!_hasLastKnownPlayerPosition || _lastKnownPositionInvestigated))
+                orders.Add(SquadOrder.Patrol(Vector3.zero));
 
             return orders;
         }
@@ -854,6 +892,13 @@ namespace Halazia.AI.Commander
                     Gizmos.DrawLine(transform.position + Vector3.up * 1.5f, agent.Position + Vector3.up * 1.5f);
                 }
             }
+
+#if UNITY_EDITOR
+            Gizmos.color = new Color(0.65f, 0.25f, 0.9f);
+            Gizmos.DrawWireSphere(transform.position + Vector3.up * 2f, 0.25f);
+            UnityEditor.Handles.Label(transform.position + Vector3.up * 2.3f,
+                $"Commander\n[{_behaviourMode}]\nInvestigated:{_investigationResolved}");
+#endif
         }
 
         #endregion

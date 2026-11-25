@@ -1,5 +1,5 @@
-
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.AI;
 using Halazia.AI.Commander;
@@ -8,43 +8,33 @@ using Halazia.Shared.Squad;
 
 namespace Halazia.Sandbox
 {
-    /// <summary>
-    /// Lightweight mock implementation of ISquadAgent for testing
-    /// Commander task allocation in the sandbox scene.
-    /// Uses IAgentMotor for movement.
-    /// </summary>
+    /// <summary>Sandbox squad agent using AgentMotor and an Investigate search dwell.</summary>
     [RequireComponent(typeof(AgentMotor))]
     public class MockSquadAgent : MonoBehaviour, Halazia.Shared.Squad.ISquadAgent
     {
         [Header("Agent Identity")]
         [SerializeField] private string _agentId = "Agent_01";
-        [SerializeField] private AgentRole _role = AgentRole.Hunter;
+        [SerializeField] private AgentRole _role = AgentRole.Sentinel;
         [SerializeField] private float _maxHealth = 100f;
-
         [Header("State")]
         [SerializeField] private SquadTaskType _currentTask = SquadTaskType.Idle;
         [SerializeField, Min(0f)] private float _searchDwellSeconds = 5f;
 
         private float _currentHealth;
         private IAgentMotor _motor;
-        private SquadOrder _activeOrder;
         private bool _deathReported, _arrivedReported;
-        private Coroutine _investigationRoutine;
+        private Coroutine _searchRoutine;
+        private int _orderVersion;
+        private CommanderAgent _commander;
 
         public string AgentId => _agentId;
         public AgentRole Role => _role;
         public Vector3 Position => transform.position;
         public float CurrentHealth => _currentHealth;
         public float MaxHealth => _maxHealth;
-        public bool IsAlive =>
-            _currentHealth > 0.001f && gameObject.activeInHierarchy;
-
-        public bool IsEngagedWithPlayer =>
-            _currentTask == SquadTaskType.Pursue;
-
+        public bool IsAlive => _currentHealth > 0.001f && gameObject.activeInHierarchy;
+        public bool IsEngagedWithPlayer => _currentTask == SquadTaskType.Pursue;
         public SquadTaskType CurrentTask => _currentTask;
-
-        // These events must match the Shared ISquadAgent interface.
         public event Action<Halazia.Shared.Squad.ISquadAgent> OnDied;
         public event Action<Halazia.Shared.Squad.ISquadAgent> OnTaskArrived;
         public event Action<Halazia.Shared.Squad.ISquadAgent> OnTaskBlocked;
@@ -55,223 +45,151 @@ namespace Halazia.Sandbox
         {
             _currentHealth = _maxHealth;
             _motor = GetComponent<IAgentMotor>();
-            _deathReported = false;
         }
 
         private void OnEnable()
         {
-            var commander = FindAnyObjectByType<CommanderAgent>();
-
-            if (commander != null)
+            if (_motor != null)
             {
-                commander.RegisterSquadMember(this);
+                _motor.OnArrived += HandleMotorArrived;
+                _motor.OnPathBlocked += HandleMotorBlocked;
             }
+            RegisterWithCommander();
+        }
+
+        private void Start() => RegisterWithCommander();
+
+        private void RegisterWithCommander()
+        {
+            if (_commander == null) _commander = FindAnyObjectByType<CommanderAgent>();
+            if (_commander != null) _commander.RegisterSquadMember(this);
         }
 
         private void OnDisable()
         {
-            var commander = FindAnyObjectByType<CommanderAgent>();
-            commander?.UnregisterSquadMember(this);
-        }
-
-        private void OnDestroy()
-        {
-            var commander = FindAnyObjectByType<CommanderAgent>();
-            commander?.UnregisterSquadMember(this);
-        }
-
-        private void Update()
-        {
-            if (_currentTask == SquadTaskType.Idle)
-                return;
-
-            if (_motor == null)
-                return;
-
-            if (_activeOrder.TargetPosition != Vector3.zero &&
-                !_motor.IsMoving)
+            if (_motor != null)
             {
-                float distance = Vector3.Distance(
-                    transform.position,
-                    _activeOrder.TargetPosition
-                );
-
-                if (distance <= 1.8f)
-                {
-                    if (!_arrivedReported)
-                    {
-                        _arrivedReported = true;
-                        OnTaskArrived?.Invoke(this);
-                    }
-                    if (_currentTask == SquadTaskType.Investigate)
-                    {
-                        if (_investigationRoutine == null)
-                            _investigationRoutine = StartCoroutine(CompleteInvestigationAfterDwell());
-                    }
-                    else
-                    {
-                        _currentTask = SquadTaskType.Idle;
-                    }
-                }
-                else if (
-                    _currentTask == SquadTaskType.Pursue ||
-                    _currentTask == SquadTaskType.Flank ||
-                    _currentTask == SquadTaskType.Investigate ||
-                    _currentTask == SquadTaskType.CoverRoute)
-                {
-                    ExecutePath(_activeOrder.TargetPosition);
-                }
+                _motor.OnArrived -= HandleMotorArrived;
+                _motor.OnPathBlocked -= HandleMotorBlocked;
             }
+            CancelOrder();
+            if (_commander != null) _commander.UnregisterSquadMember(this);
+        }
+
+        private void StopSearch()
+        {
+            if (_searchRoutine == null) return;
+            StopCoroutine(_searchRoutine);
+            _searchRoutine = null;
         }
 
         public void AssignOrder(SquadOrder order)
         {
-            if (_investigationRoutine != null)
-            {
-                StopCoroutine(_investigationRoutine);
-                _investigationRoutine = null;
-            }
-            _activeOrder = order;
+            StopSearch();
+            _orderVersion++;
             _currentTask = order.TaskType;
             _arrivedReported = false;
-
-            Debug.Log(
-                $"[MockSquadAgent:{_agentId}] Received order: " +
-                $"{order.TaskType} to {order.TargetPosition}"
-            );
-
+            Debug.Log($"[MockSquadAgent:{_agentId}] Received order: {order.TaskType} to {order.TargetPosition}");
+            if (order.TaskType == SquadTaskType.Idle || order.TaskType == SquadTaskType.Patrol)
+            {
+                // Mock agents have no waypoint patrol route.
+                _motor?.Stop();
+                return;
+            }
             ExecutePath(order.TargetPosition);
         }
 
-        // Optional convenience method.
-        // The shared interface also provides a default implementation.
-        public void AcceptOrder(SquadOrder order)
-        {
-            AssignOrder(order);
-        }
+        public void AcceptOrder(SquadOrder order) => AssignOrder(order);
 
         private void ExecutePath(Vector3 targetPosition)
         {
-            if (_motor == null)
+            if (_motor == null) return;
+            if (!NavMesh.SamplePosition(transform.position, out NavMeshHit startHit, 3f, NavMesh.AllAreas) ||
+                !NavMesh.SamplePosition(targetPosition, out NavMeshHit targetHit, 5f, NavMesh.AllAreas))
+            {
+                HandleMotorBlocked();
                 return;
-
-            Vector3 start = transform.position;
-            Vector3 target = targetPosition;
-
-            if (NavMesh.SamplePosition(
-                start,
-                out NavMeshHit startHit,
-                3.0f,
-                NavMesh.AllAreas))
-            {
-                start = startHit.position;
             }
-
-            if (NavMesh.SamplePosition(
-                target,
-                out NavMeshHit targetHit,
-                5.0f,
-                NavMesh.AllAreas))
+            var path = new NavMeshPath();
+            if (!NavMesh.CalculatePath(startHit.position, targetHit.position, NavMesh.AllAreas, path) ||
+                path.status != NavMeshPathStatus.PathComplete || path.corners == null || path.corners.Length == 0)
             {
-                target = targetHit.position;
+                HandleMotorBlocked();
+                return;
             }
+            if (_currentTask == SquadTaskType.Pursue || _currentTask == SquadTaskType.Flank)
+                _motor.SetFaceTarget(targetHit.position);
+            _motor.SetPath(path.corners);
+        }
 
-            NavMeshPath path = new NavMeshPath();
-
-            if (NavMesh.CalculatePath(
-                start,
-                target,
-                NavMesh.AllAreas,
-                path))
-            {
-                if (path.corners != null &&
-                    path.corners.Length > 0)
-                {
-                    _motor.SetPath(path.corners);
-
-                    if (_currentTask == SquadTaskType.Pursue ||
-                        _currentTask == SquadTaskType.Flank)
-                    {
-                        _motor.SetFaceTarget(target);
-                    }
-                }
-                else
-                {
-                    OnTaskBlocked?.Invoke(this);
-                }
-            }
+        private void HandleMotorArrived()
+        {
+            if (!IsAlive || _arrivedReported || _currentTask == SquadTaskType.Idle ||
+                _currentTask == SquadTaskType.Patrol) return;
+            _arrivedReported = true;
+            int version = _orderVersion;
+            Debug.Log($"[MockSquadAgent:{_agentId}] Arrived at {_currentTask} destination.");
+            OnTaskArrived?.Invoke(this);
+            if (version != _orderVersion || !isActiveAndEnabled || !IsAlive) return;
+            if (_currentTask == SquadTaskType.Investigate)
+                _searchRoutine = StartCoroutine(SearchDwellRoutine(version));
             else
-            {
-                OnTaskBlocked?.Invoke(this);
-            }
+                _currentTask = SquadTaskType.Idle;
+        }
+
+        private IEnumerator SearchDwellRoutine(int version)
+        {
+            yield return new WaitForSeconds(_searchDwellSeconds);
+            _searchRoutine = null;
+            if (!IsAlive || version != _orderVersion || _currentTask != SquadTaskType.Investigate)
+                yield break;
+            // Commander requires the task to remain Investigate during this callback.
+            OnInvestigateComplete?.Invoke(this);
+            if (version == _orderVersion && _currentTask == SquadTaskType.Investigate)
+                _currentTask = SquadTaskType.Idle;
+        }
+
+        private void HandleMotorBlocked()
+        {
+            if (!IsAlive) return;
+            StopSearch();
+            Debug.LogWarning($"[MockSquadAgent:{_agentId}] Path blocked on task {_currentTask}.");
+            OnTaskBlocked?.Invoke(this);
         }
 
         public void CancelOrder()
         {
-            if (_investigationRoutine != null)
-            {
-                StopCoroutine(_investigationRoutine);
-                _investigationRoutine = null;
-            }
+            StopSearch();
+            _orderVersion++;
             _currentTask = SquadTaskType.Idle;
             _arrivedReported = false;
             _motor?.Stop();
         }
 
-        private System.Collections.IEnumerator CompleteInvestigationAfterDwell()
-        {
-            yield return new WaitForSeconds(_searchDwellSeconds);
-            _investigationRoutine = null;
-            if (!IsAlive || _currentTask != SquadTaskType.Investigate) yield break;
-            OnInvestigateComplete?.Invoke(this);
-            if (_currentTask == SquadTaskType.Investigate) _currentTask = SquadTaskType.Idle;
-        }
-
         public void TakeDamage(float damage)
         {
-            if (!IsAlive || damage <= 0f)
-                return;
-
-            _currentHealth = Mathf.Max(
-                0f,
-                _currentHealth - damage
-            );
-
-            if (_currentHealth <= 0.001f &&
-                !_deathReported)
+            if (!IsAlive || damage <= 0f) return;
+            _currentHealth = Mathf.Max(0f, _currentHealth - damage);
+            if (_currentHealth <= 0.001f && !_deathReported)
             {
                 _deathReported = true;
+                CancelOrder();
                 OnDied?.Invoke(this);
             }
-        }
-
-        private void OnPathBlockedHandler()
-        {
-            OnTaskBlocked?.Invoke(this);
         }
 
         private void OnDrawGizmos()
         {
 #if UNITY_EDITOR
-            Color roleColor = _role switch
+            Gizmos.color = _role switch
             {
                 AgentRole.Hunter => Color.red,
                 AgentRole.Flanker => Color.yellow,
                 AgentRole.Sentinel => Color.blue,
                 _ => Color.white
             };
-
-            Gizmos.color = roleColor;
-
-            Gizmos.DrawWireSphere(
-                transform.position + Vector3.up * 2f,
-                0.25f
-            );
-
-            UnityEditor.Handles.Label(
-                transform.position + Vector3.up * 2.3f,
-                $"{_role}\n[{_currentTask}]"
-            );
+            Gizmos.DrawWireSphere(transform.position + Vector3.up * 2f, 0.25f);
+            UnityEditor.Handles.Label(transform.position + Vector3.up * 2.3f, $"{_role}\n[{_currentTask}]");
 #endif
         }
     }

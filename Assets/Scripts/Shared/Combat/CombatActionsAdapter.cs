@@ -16,7 +16,7 @@ namespace Halazia.Shared.Combat
 
         private void Awake()
         {
-            _driver = GetComponent<AgentAnimatorDriver>();
+            _driver = GetComponent<AgentAnimatorDriver>() ?? GetComponentInChildren<AgentAnimatorDriver>();
         }
 
         /// <inheritdoc/>

@@ -9,7 +9,7 @@ namespace Halazia.Shared.Movement
     /// Prevents foot sliding and animation snapping by filtering measured physical velocity
     /// through damped blend parameters, and coordinates attack/combat animation states with locomotion.
     /// </summary>
-    [RequireComponent(typeof(Animator))]
+    // Animator can reside on this GameObject or on a child model (e.g. CommanderModel)
     [DisallowMultipleComponent]
     public class AgentAnimatorDriver : MonoBehaviour
     {
@@ -103,7 +103,7 @@ namespace Halazia.Shared.Movement
 
         private void Awake()
         {
-            _animator = GetComponent<Animator>();
+            _animator = GetComponent<Animator>() ?? GetComponentInChildren<Animator>();
 
             // Resolve IAgentMotor interface reference
             if (_motorSource is IAgentMotor motorInterface)
@@ -192,8 +192,17 @@ namespace Halazia.Shared.Movement
         /// <param name="attackType">Index selecting specific attack variation (0=Light Melee, 1=Heavy Slash, 2=Shot).</param>
         public void TriggerAttack(int attackType = 0)
         {
-            if (_animator == null || _dead || IsAttacking || !isActiveAndEnabled) return;
+            if (_dead || IsAttacking || !isActiveAndEnabled) return;
+            if (_animator == null)
+                _animator = GetComponent<Animator>() ?? GetComponentInChildren<Animator>();
+            if (_animator == null) return;
             IsAttacking = true;
+
+            if (!_hasAttackTrigger && _animator.runtimeAnimatorController != null)
+            {
+                _hasAttackTrigger = HasParameter(_animator, _attackTriggerHash);
+                _hasAttackTypeParam = HasParameter(_animator, _attackTypeParamHash);
+            }
 
             if (_hasAttackTypeParam)
             {
@@ -203,6 +212,10 @@ namespace Halazia.Shared.Movement
             if (_hasAttackTrigger)
             {
                 _animator.SetTrigger(_attackTriggerHash);
+            }
+            else
+            {
+                try { _animator.SetTrigger(_attackTriggerName); } catch {}
             }
 
             if (_motor != null)

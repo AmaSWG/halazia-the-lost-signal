@@ -65,13 +65,12 @@ namespace Halazia.Shared.Squad
 
         // ── Reports (Agent → Commander) ───────────────────────────────────────────
         /// <summary>
-        /// Fired when the agent arrives at the order's TargetPosition.
+        /// Fired when the agent arrives at the order's TargetPosition (navigation complete).
+        /// For Investigate orders this means the agent reached the location, NOT that the full
+        /// search dwell has finished. Wait for OnInvestigateComplete before releasing the agent.
         /// Arg: the agent that arrived.
         /// </summary>
         event Action<ISquadAgent> OnTaskArrived;
-
-        /// <summary>Fired after an Investigate order's search dwell expires without reacquiring the player.</summary>
-        event Action<ISquadAgent> OnInvestigateComplete;
 
         /// <summary>
         /// Fired when the agent's path is blocked and it cannot reach the target.
@@ -92,5 +91,19 @@ namespace Halazia.Shared.Squad
         /// Arg: the dying agent.
         /// </summary>
         event Action<ISquadAgent> OnDied;
+
+        /// <summary>
+        /// Fired when an agent has fully completed an Investigate order: navigation to the
+        /// last known player position AND the Search dwell period have both concluded with
+        /// no player contact found.
+        ///
+        /// This is distinct from OnTaskArrived (which fires on arrival only).
+        /// The Commander uses this event to close the Investigate order, clear the stale
+        /// last-known position, and release the agent back to Patrol.
+        ///
+        /// Implementors: fire this after the Search timer expires while CurrentTask == Investigate.
+        /// Arg: the agent that completed the full investigation cycle.
+        /// </summary>
+        event Action<ISquadAgent> OnInvestigateComplete;
     }
 }

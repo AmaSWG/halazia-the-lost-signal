@@ -52,12 +52,16 @@ Desktop.ini
 *.orig
 *~
 
-# Build outputs
+*.unitypackage
 
 *.apk
 *.aab
 *.app
 *.unitypackage
-/Artifacts/SentinelRifle/Attachment
-/Artifacts/SentinelRifle/Hold/OptionB_HoldAndStrike
-/Artifacts/SentinelRifle
+/Artifacts/SentinelRifle/
+
+# User & temporary backups
+.vsconfig
+*.blend1
+Assets/_Recovery/
+Assets/_Recovery.meta
