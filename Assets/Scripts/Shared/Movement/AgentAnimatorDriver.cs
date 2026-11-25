@@ -103,7 +103,7 @@ namespace Halazia.Shared.Movement
 
         private void Awake()
         {
-            _animator = GetComponent<Animator>() ?? GetComponentInChildren<Animator>();
+            _animator = GetComponentInChildren<Animator>(true);
 
             // Resolve IAgentMotor interface reference
             if (_motorSource is IAgentMotor motorInterface)
@@ -146,7 +146,6 @@ namespace Halazia.Shared.Movement
 
             // Measured physical scalar speed
             float targetSpeed = _motor.CurrentSpeed;
-
             if (_normalizeSpeed && _expectedMaxSpeed > 0.01f)
             {
                 targetSpeed = Mathf.Clamp01(targetSpeed / _expectedMaxSpeed);
