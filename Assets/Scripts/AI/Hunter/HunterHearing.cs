@@ -72,6 +72,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
     public event Action<ISquadAgent> OnTaskArrived;
     public event Action<ISquadAgent> OnTaskBlocked;
     public event Action<ISquadAgent> OnTargetLost;
+    public event Action<ISquadAgent> OnInvestigateComplete;
     public event Action<ISquadAgent> OnDied;
 
     private void Awake()
@@ -228,6 +229,7 @@ public class HunterHearing : MonoBehaviour, ISquadAgent
 
         int versionBeforeReport = actionVersion;
         OnTargetLost?.Invoke(this);
+        OnInvestigateComplete?.Invoke(this);
 
         // A listener may synchronously issue a new order.
         if (actionVersion != versionBeforeReport || !IsAlive)
